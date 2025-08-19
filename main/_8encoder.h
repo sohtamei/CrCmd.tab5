@@ -1,6 +1,10 @@
 #ifndef _8ENCODER
 #define _8ENCODER
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 enum {
 	_8ENCODER_REG_COUNTER	= 0x00,		// [R/W]4byte*8
 	_8ENCODER_REG_INCREMENT	= 0x20,		// [R] 4byte*8
@@ -15,4 +19,8 @@ int _8encoder_delete(void);
 
 int _8encoder_read(int reg, int32_t* data, int num);
 int _8encoder_write(int reg, int index, uint32_t data);
+
+#ifdef __cplusplus
+}
+#endif
 #endif
