@@ -15,6 +15,7 @@
 #include "esp_intr_alloc.h"
 #include "driver/gpio.h"
 #include "usb/usb_host.h"
+#include "driver/jpeg_decode.h"
 #include <M5GFX.h>
 #include <M5Unified.h>
 
@@ -492,7 +493,7 @@ static int usb_ptp_transfer(uint32_t pcode,
 			return -1;
 		}
 	}
-	ESP_LOG_BUFFER_HEXDUMP(TAG, xfer_in->data_buffer, xfer_in->actual_num_bytes, ESP_LOG_INFO);
+//	ESP_LOG_BUFFER_HEXDUMP(TAG, xfer_in->data_buffer, xfer_in->actual_num_bytes, ESP_LOG_INFO);
 	return 0;
 }
 
@@ -750,14 +751,41 @@ extern "C" void app_main(void)
 	ret = _8encoder_read(_8ENCODER_REG_COUNTER, cnt_last, PARAM_NUM);
 //	if(!ret) printf("%3ld,%3ld,%3ld,%3ld,\n", cnt_last[0],cnt_last[1],cnt_last[2],cnt_last[3]);//,cnt_last[4],cnt_last[5],cnt_last[6],cnt_last[7]);
 
-//	int32_t tmp[8];
-//	ret = _8encoder_read(_8ENCODER_REG_BUTTON, tmp, 8);
-//	if(!ret) printf("%ld\n", tmp[0]);
 
+	#define IMAGE_W 640
+	#define IMAGE_H 424
+	size_t rx_buf_size;
+	jpeg_decode_memory_alloc_cfg_t rx_mem_cfg = { .buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER };
+	uint8_t *rx_buf = (uint8_t*)jpeg_alloc_decoder_mem(IMAGE_W*IMAGE_H*2, &rx_mem_cfg, &rx_buf_size);
+
+	jpeg_decoder_handle_t jpgd_handle;
+	jpeg_decode_engine_cfg_t decode_eng_cfg = {
+		.intr_priority = 0,
+		.timeout_ms = 40,
+	};
+	jpeg_new_decoder_engine(&decode_eng_cfg, &jpgd_handle);
+
+	jpeg_decode_cfg_t decode_cfg = {
+		.output_format = JPEG_DECODE_OUT_FORMAT_RGB565,
+		.rgb_order = JPEG_DEC_RGB_ELEMENT_ORDER_RGB,
+		.conv_std = JPEG_YUV_RGB_CONV_STD_BT601,
+	};
+
+//	free(rx_buf);
+//	jpeg_del_decoder_engine(jpgd_handle);
+
+
+	uint64_t base_time = 0;
+	uint32_t time1;
+	uint32_t time2;
+	uint32_t time3;
 	while(1) {
+		base_time = esp_timer_get_time();
+
 		ret = _8encoder_read(_8ENCODER_REG_COUNTER, cnt_cur, PARAM_NUM);
 	//	if(!ret) printf("%3ld,%3ld,%3ld,%3ld,\n", cnt_cur[0],cnt_cur[1],cnt_cur[2],cnt_cur[3]);//,cnt_cur[4],cnt_cur[5],cnt_cur[6],cnt_cur[7]);
 
+		time1 = esp_timer_get_time() - base_time;
 		if(g_driver_obj.ptpEvent & EVENT_DP_Changed) {
 			g_driver_obj.ptpEvent &= ~EVENT_DP_Changed;
 			updateDeviceProp(true);
@@ -778,6 +806,7 @@ extern "C" void app_main(void)
 		ret = usb_ptp_transfer(PTP_OC_GetObject, 1, 0xFFFFC002,0,0,0,0, NULL,0, &lv_buf, &lv_buf_size);
 		if(ret) break;
 
+		time2 = esp_timer_get_time() - base_time;
 		/*
 		# header  0
 		F4 03 00 00 		LiveView Image Offset
@@ -793,12 +822,18 @@ extern "C" void app_main(void)
 		*/
 		int lv_offset = GetL32(lv_buf+0);
 		int lv_size   = GetL32(lv_buf+4);
-		M5.Display.drawJpg(lv_buf+lv_offset, lv_size, 0, 0);
+	//	M5.Display.startWrite();
+	//	M5.Display.drawJpg(lv_buf+lv_offset, lv_size, 0, 0);
 	//	M5.Display.endWrite();
+
+		uint32_t out_size = 0;
+		jpeg_decoder_process(jpgd_handle, &decode_cfg, lv_buf+lv_offset, lv_size, rx_buf, rx_buf_size, &out_size);
+		M5.Display.pushImage(0, 0, IMAGE_W, IMAGE_H, (uint16_t*)rx_buf);
 
 		if(lv_buf) free(lv_buf);
 
-		vTaskDelay(5);
+		time3 = esp_timer_get_time() - base_time;
+		printf("%6ld,%6ld,%ld\n", time1, time2-time1, time3-time2);
 	}
 
 	vTaskDelay(200);
