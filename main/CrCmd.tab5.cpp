@@ -13,17 +13,17 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_intr_alloc.h"
+#include "esp_timer.h"
 #include "driver/gpio.h"
-#include "usb/usb_host.h"
+#include "driver/ppa.h"
 #include "driver/jpeg_decode.h"
-#include <M5GFX.h>
-#include <M5Unified.h>
+#include "usb/usb_host.h"
 
 #include "PTPDef.h"
 #include "_8encoder.h"
+#include "ppa_dsi_main.h"
 
 static const char *TAG = "DAEMON";
-
 
 #define DAEMON_TASK_PRIORITY    2
 #define CLASS_TASK_PRIORITY     3
@@ -85,119 +85,6 @@ usb_transfer_t *event_in = NULL;
 
 
 static int updateDeviceProp(int onlyDiff);
-
-
-
-
-#include "driver/i2c.h"
-
-#define E1_ADDR			0x43  // ADDR=GND
-#define E2_ADDR			0x44  // ADDR=VDD
-#define SYS_SDA			31
-#define SYS_SCL			32
-
-#define PIO_REG_DEV_ID		0x01	// Device ID and Control
-#define PIO_REG_IO_DIR		0x03	// 0=input, 1=output
-#define PIO_REG_OUT_STATE	0x05	// 0=Low, 1=High
-#define PIO_REG_OUT_HIZ		0x07	// Output High-Impedance (0=enable, 1=Hi-Z)
-#define PIO_REG_PUPD_EN		0x0B
-#define PIO_REG_PUPD_SEL	0x0D
-#define PIO_REG_INP_STAT	0x0F
-
-
-/*
-E1.P0	RF_PTH (H:ext,L:int)
-E1.P1	SKP_EN
-E1.P2	EXT5V_EN
-E1.P4	LCD_RST
-E1.P5	TP_RST
-E1.P6	CAM_RST
-E1.P7	HP_DETECT(I)
-
-E2.P0	WLAN_PWR_EN
-E2.P3	USB5V_EN
-E2.P4	PWROFF_PULSE
-E2.P5	nCHG_CURRENT(H:0.5A,L:1A)
-E2.P6	CHG_STAT(I)
-E2.P7	CHG_EN
-*/
-esp_err_t i2c0_write_reg(uint8_t addr, uint8_t reg, uint8_t val)
-{
-    uint8_t buf[2] = {reg, val};
-    return i2c_master_write_to_device(
-    			I2C_NUM_0, addr,
-    			buf, sizeof(buf),
-    			1000/portTICK_PERIOD_MS);
-}
-
-esp_err_t i2c0_read_reg(uint8_t addr, uint8_t reg, uint8_t *val)
-{
-    return i2c_master_write_read_device(
-    			I2C_NUM_0, addr,
-    			&reg, 1,
-    			val, 1,
-    			1000/portTICK_PERIOD_MS);
-}
-
-esp_err_t _init_port(void)
-{
-//	esp_err_t ret;
-
-	const i2c_config_t i2c_conf = {
-		.mode = I2C_MODE_MASTER,
-		.sda_io_num = SYS_SDA,
-		.scl_io_num = SYS_SCL,
-		.sda_pullup_en = GPIO_PULLUP_ENABLE,
-		.scl_pullup_en = GPIO_PULLUP_ENABLE,
-		.master = { .clk_speed = 100000 },
-		.clk_flags = 0,
-	};
-	i2c_param_config(I2C_NUM_0, &i2c_conf);
-	ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM_0, i2c_conf.mode, 0/*I2C_MASTER_RX_BUF_DISABLE*/, 0/*I2C_MASTER_TX_BUF_DISABLE*/, 0));
-/*
-	uint8_t reg1, reg2, reg3;
-	i2c0_read_reg(E1_ADDR, PIO_REG_IO_DIR,   &reg1);	// 0=input, 1=output
-	i2c0_read_reg(E1_ADDR, PIO_REG_OUT_HIZ,  &reg2);	// Output Hi-z(0=enable, 1=Hi-Z)
-	i2c0_read_reg(E1_ADDR, PIO_REG_OUT_STATE,&reg3);	// 0=Low, 1=High
-	printf("%02x %02x %02x\n", reg1,reg2,reg3);
-
-	i2c0_read_reg(E2_ADDR, PIO_REG_IO_DIR,   &reg1);	// 0=input, 1=output
-	i2c0_read_reg(E2_ADDR, PIO_REG_OUT_HIZ,  &reg2);	// Output Hi-z(0=enable, 1=Hi-Z)
-	i2c0_read_reg(E2_ADDR, PIO_REG_OUT_STATE,&reg3);	// 0=Low, 1=High
-	printf("%02x %02x %02x\n", reg1,reg2,reg3);
-*/
-	// PI4IOE5V6408
-	/*
-	E1.P7	i	HP_DETECT
-	E1.P6	H	CAM_RST
-	E1.P5	H	TP_RST
-	E1.P4	H	LCD_RST
-	E1.P3	x
-	E1.P2	H	EXT5V_EN
-	E1.P1	H	SKP_EN
-	E1.P0	L	RF_PTH (H:ext,L:int)
-	*/
-														//      iHHHLHHL
-	ESP_ERROR_CHECK(i2c0_write_reg(E1_ADDR, PIO_REG_IO_DIR,   0b01111111));	// 0=input, 1=output
-	ESP_ERROR_CHECK(i2c0_write_reg(E1_ADDR, PIO_REG_OUT_HIZ,  0b00000000));	// Output Hi-z(0=enable, 1=Hi-Z)
-	ESP_ERROR_CHECK(i2c0_write_reg(E1_ADDR, PIO_REG_OUT_STATE,0b01110110));	// 0=Low, 1=High
-	/*
-	E2.P7	H	CHG_EN
-	E2.P6	i	CHG_STAT
-	E2.P5	H	nCHG_CURRENT(H:0.5A,L:1A)
-	E2.P4	L	PWROFF_PULSE
-	E2.P3	H	USB5V_EN
-	E2.P2	x
-	E2.P1	x
-	E2.P0	L	WLAN_PWR_EN
-	*/
-														//      HiHLHiiL
-	ESP_ERROR_CHECK(i2c0_write_reg(E2_ADDR, PIO_REG_IO_DIR,   0b10111001));	// 0=input, 1=output
-	ESP_ERROR_CHECK(i2c0_write_reg(E2_ADDR, PIO_REG_OUT_HIZ,  0b00000110));	// Output Hi-z(0=enable, 1=Hi-Z)
-	ESP_ERROR_CHECK(i2c0_write_reg(E2_ADDR, PIO_REG_OUT_STATE,0b10101000));	// 0=Low, 1=High
-
-	return ESP_OK;
-}
 
 
 
@@ -666,23 +553,37 @@ static int updateDeviceProp(int onlyDiff)
 
 extern "C" void app_main(void)
 {
-	auto cfg = M5.config();
-	M5.begin(cfg);
-
 	_init_port();
 
-	M5.Display.fillScreen(TFT_BLACK);
-	M5.Display.setBrightness(200);			// 0-255
-	M5.Display.setRotation(3);
-	M5.Display.setTextSize(2);
-	M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-	M5.Display.setCursor(16, 16);
-	M5.Display.println("Hello Tab5 + M5GFX");
-	M5.Display.drawRoundRect(12, 60, 400, 120, 12, TFT_CYAN);
-	M5.Display.drawFastHLine(12, 120, 400, TFT_YELLOW);
+    esp_lcd_dsi_bus_handle_t  mipi_dsi_bus = NULL;
+    esp_lcd_panel_io_handle_t mipi_dbi_io = NULL;
+    esp_lcd_panel_handle_t    mipi_dpi_panel = NULL;
+    esp_dsi_resource_alloc(&mipi_dsi_bus, &mipi_dbi_io, &mipi_dpi_panel, NULL);
 
-//	M5.Display.setTextDatum(textdatum_t::middle_center);
-//	M5.Display.drawString("Hello Tab5 (ESP-IDF + M5GFX)", M5.Display.width()/2, M5.Display.height()/2);
+	size_t raw_size;
+	jpeg_decode_memory_alloc_cfg_t rx_mem_cfg = { .buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER };
+	uint8_t* raw_buf = (uint8_t*)jpeg_alloc_decoder_mem(EXAMPLE_IMAGE_W*EXAMPLE_IMAGE_H*2, &rx_mem_cfg, &raw_size);
+
+    size_t scale_size = EXAMPLE_IMAGE_H * EXAMPLE_IMAGE_W * 4 * 2;
+    uint8_t* scale_buf = (uint8_t*)heap_caps_calloc(scale_size, 1, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM);
+    if (!scale_buf) {
+        ESP_LOGE("xx", "no mem for scale_buf");
+        return ;
+    }
+
+	jpeg_decoder_handle_t jpgd_handle;
+	jpeg_decode_engine_cfg_t decode_eng_cfg = {
+		.intr_priority = 0,
+		.timeout_ms = 40,
+	};
+	jpeg_new_decoder_engine(&decode_eng_cfg, &jpgd_handle);
+
+    ppa_client_handle_t ppa_srm_handle = NULL;
+    ppa_client_config_t ppa_srm_config = {
+        .oper_type = PPA_OPERATION_SRM,
+        .max_pending_trans_num = 1,
+    };
+    ESP_ERROR_CHECK(ppa_register_client(&ppa_srm_config, &ppa_srm_handle));
 
 	usb_host_init();
 
@@ -752,29 +653,6 @@ extern "C" void app_main(void)
 //	if(!ret) printf("%3ld,%3ld,%3ld,%3ld,\n", cnt_last[0],cnt_last[1],cnt_last[2],cnt_last[3]);//,cnt_last[4],cnt_last[5],cnt_last[6],cnt_last[7]);
 
 
-	#define IMAGE_W 640
-	#define IMAGE_H 424
-	size_t rx_buf_size;
-	jpeg_decode_memory_alloc_cfg_t rx_mem_cfg = { .buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER };
-	uint8_t *rx_buf = (uint8_t*)jpeg_alloc_decoder_mem(IMAGE_W*IMAGE_H*2, &rx_mem_cfg, &rx_buf_size);
-
-	jpeg_decoder_handle_t jpgd_handle;
-	jpeg_decode_engine_cfg_t decode_eng_cfg = {
-		.intr_priority = 0,
-		.timeout_ms = 40,
-	};
-	jpeg_new_decoder_engine(&decode_eng_cfg, &jpgd_handle);
-
-	jpeg_decode_cfg_t decode_cfg = {
-		.output_format = JPEG_DECODE_OUT_FORMAT_RGB565,
-		.rgb_order = JPEG_DEC_RGB_ELEMENT_ORDER_RGB,
-		.conv_std = JPEG_YUV_RGB_CONV_STD_BT601,
-	};
-
-//	free(rx_buf);
-//	jpeg_del_decoder_engine(jpgd_handle);
-
-
 	uint64_t base_time = 0;
 	uint32_t time1;
 	uint32_t time2;
@@ -822,13 +700,11 @@ extern "C" void app_main(void)
 		*/
 		int lv_offset = GetL32(lv_buf+0);
 		int lv_size   = GetL32(lv_buf+4);
-	//	M5.Display.startWrite();
-	//	M5.Display.drawJpg(lv_buf+lv_offset, lv_size, 0, 0);
-	//	M5.Display.endWrite();
 
-		uint32_t out_size = 0;
-		jpeg_decoder_process(jpgd_handle, &decode_cfg, lv_buf+lv_offset, lv_size, rx_buf, rx_buf_size, &out_size);
-		M5.Display.pushImage(0, 0, IMAGE_W, IMAGE_H, (uint16_t*)rx_buf);
+		display_jpeg(jpgd_handle, ppa_srm_handle, mipi_dpi_panel,
+							lv_buf+lv_offset, lv_size,
+							raw_buf, raw_size,
+							scale_buf, scale_size);
 
 		if(lv_buf) free(lv_buf);
 
@@ -850,6 +726,13 @@ extern "C" void app_main(void)
 	//Delete the tasks
 	vTaskDelete(class_driver_task_hdl);
 	vTaskDelete(daemon_task_hdl);
+
+    free(scale_buf);
+	free(raw_buf);
+
+    ESP_ERROR_CHECK(ppa_unregister_client(ppa_srm_handle));
+	jpeg_del_decoder_engine(jpgd_handle);
+    esp_dsi_resource_destroy(mipi_dsi_bus, mipi_dbi_io, mipi_dpi_panel);
 }
 
 /*
