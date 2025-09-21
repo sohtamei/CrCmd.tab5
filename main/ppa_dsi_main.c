@@ -186,18 +186,6 @@ void esp_dsi_resource_alloc(esp_lcd_dsi_bus_handle_t *mipi_dsi_bus, esp_lcd_pane
         .virtual_channel = 0,
         .pixel_format = LCD_COLOR_PIXEL_FORMAT_RGB565,
         .num_fbs = 1,
-        .video_timing = {
-            .h_size = 720,
-            .v_size = 1280,
-            .hsync_back_porch = 140,
-            .hsync_pulse_width = 40,
-            .hsync_front_porch = 40,
-            .vsync_back_porch = 20,
-            .vsync_pulse_width = 4,
-            .vsync_front_porch = 20,
-        },
-//      .flags.use_dma2d = true,
-    };
 #else  // ppa_dsi sample
     // Refresh Rate = 80000000/(40+140+40+800)/(4+16+16+1280) = 60Hz
     esp_lcd_dpi_panel_config_t dpi_config = {
@@ -205,6 +193,7 @@ void esp_dsi_resource_alloc(esp_lcd_dsi_bus_handle_t *mipi_dsi_bus, esp_lcd_pane
         .dpi_clock_freq_mhz = 80,
         .virtual_channel = 0,
         .in_color_format = LCD_COLOR_FMT_RGB565,
+#endif
         .video_timing = {
             .h_size = 720,
             .v_size = 1280,
@@ -215,9 +204,8 @@ void esp_dsi_resource_alloc(esp_lcd_dsi_bus_handle_t *mipi_dsi_bus, esp_lcd_pane
             .vsync_pulse_width = 4,
             .vsync_front_porch = 20,
         },
-      //.flags.use_dma2d = true,
+        .flags.use_dma2d = true,
     };
-#endif
 
     ili9881c_vendor_config_t vendor_config = {
         .mipi_config = {
@@ -254,10 +242,28 @@ esp_err_t display_jpeg(	jpeg_decoder_handle_t jpgd_handle,
 						esp_lcd_panel_handle_t mipi_dpi_panel,
 						uint8_t* jpeg_buf, uint32_t jpeg_size,
 						uint8_t* raw_buf, size_t raw_size,
-						uint8_t* scale_buf, size_t scale_size)
+						uint8_t* ppa_buf, size_t ppa_size)
 {
-	uint64_t base_time = 0;
-	base_time = esp_timer_get_time();
+	struct {
+		int  out_size;
+		int  raw_width;
+		int  raw_height;
+		int  ppa_width;
+		int  x_offset;
+		float scale;
+	} const paramTable[] = {
+		{640*360*2, 640,360, 1280,   0, 720.0/360},		// 16:9
+		{640*424*2, 640,424, 1086,  97, 720.0/424},		// 3:2
+		{640*480*2, 640,480,  960, 160, 720.0/480},		// 4:3
+		{640*640*2, 640,640,  720, 280, 720.0/640},		// 1:1
+
+		{1024*576*2, 1024,576, 1280,   0, 720.0/576},		// 16:9
+		{1024*680*2, 1024,680, 1084,  98, 720.0/680},		// 3:2
+		{1024*768*2, 1024,768,  960, 160, 720.0/768},		// 4:3
+		{1024*1024*2,1024,1024, 720, 280, 720.0/1024},		// 1:1
+	};
+//	uint64_t base_time = 0;
+//	base_time = esp_timer_get_time();
 
 	jpeg_decode_cfg_t jpeg_decode_cfg = {
 		.output_format = JPEG_DECODE_OUT_FORMAT_RGB565,
@@ -270,46 +276,53 @@ esp_err_t display_jpeg(	jpeg_decoder_handle_t jpgd_handle,
         jpeg_buf, jpeg_size,
 		raw_buf, raw_size, &out_size);
 
+	int i;
+	for(i = 0; i < numof(paramTable); i++) {
+		if(paramTable[i].out_size == out_size) break;
+	}
+	if(i >= numof(paramTable)) return -1;
+
     ppa_srm_oper_config_t srm_config = {
         .in.buffer = (uint16_t*)raw_buf,
-        .in.pic_w = EXAMPLE_IMAGE_W,
-        .in.pic_h = EXAMPLE_IMAGE_H,
-        .in.block_w = EXAMPLE_IMAGE_W,
-        .in.block_h = EXAMPLE_IMAGE_H,
+        .in.pic_w = paramTable[i].raw_width,
+        .in.pic_h = paramTable[i].raw_height,
+        .in.block_w = paramTable[i].raw_width,
+        .in.block_h = paramTable[i].raw_height,
         .in.block_offset_x = 0,
         .in.block_offset_y = 0,
         .in.srm_cm = PPA_SRM_COLOR_MODE_RGB565,
-        .out.buffer = scale_buf,
-        .out.buffer_size = scale_size,
-        .out.pic_w = EXAMPLE_IMAGE_W,
-        .out.pic_h = EXAMPLE_IMAGE_H,
+        .out.buffer = ppa_buf,
+        .out.buffer_size = ppa_size,
+        .out.pic_w = PPA_BUF_H,
+        .out.pic_h = paramTable[i].ppa_width,
         .out.block_offset_x = 0,
         .out.block_offset_y = 0,
         .out.srm_cm = PPA_SRM_COLOR_MODE_RGB565,
         .rotation_angle = PPA_SRM_ROTATION_ANGLE_90,
-        .scale_x = 1,
-        .scale_y = 1,
+        .scale_x = paramTable[i].scale,
+        .scale_y = paramTable[i].scale,
         .rgb_swap = 0,
         .byte_swap = 1,
         .mode = PPA_TRANS_MODE_BLOCKING,
     };
-    srm_config.out.pic_w = EXAMPLE_IMAGE_H * size_mul;
-    srm_config.out.pic_h = EXAMPLE_IMAGE_W * size_mul;
-    srm_config.scale_x = mul;
-    srm_config.scale_y = mul;
     ESP_ERROR_CHECK(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
 
     ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(mipi_dpi_panel,
-    										0, 0, srm_config.out.pic_w, srm_config.out.pic_h,
-    										scale_buf));
+    										0, paramTable[i].x_offset,
+    										srm_config.out.pic_w, paramTable[i].x_offset + srm_config.out.pic_h,
+    										ppa_buf));
 
-	printf("%6ld\n", (uint32_t)(esp_timer_get_time() - base_time));
+//	printf("%6ld\n", (uint32_t)(esp_timer_get_time() - base_time));
 	return 0;
 }
 
 #if 0
 extern const uint8_t image_jpg_start[] asm("_binary_image_jpg_start");
 extern const uint8_t image_jpg_end[] asm("_binary_image_jpg_end");
+
+#define EXAMPLE_IMAGE_W  640
+#define EXAMPLE_IMAGE_H  424
+
 
 void app_main(void)
 {
@@ -322,12 +335,12 @@ void app_main(void)
 
 	size_t raw_size;
 	jpeg_decode_memory_alloc_cfg_t rx_mem_cfg = { .buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER };
-	uint8_t* raw_buf = (uint8_t*)jpeg_alloc_decoder_mem(EXAMPLE_IMAGE_W*EXAMPLE_IMAGE_H*2, &rx_mem_cfg, &raw_size);
+	uint8_t* raw_buf = (uint8_t*)jpeg_alloc_decoder_mem(RAW_BUF_W*RAW_BUF_H*2, &raw_buf_cfg, &raw_size);
 
-    size_t scale_size = EXAMPLE_IMAGE_H * EXAMPLE_IMAGE_W * 4 * 2;
-    uint8_t* scale_buf = heap_caps_calloc(scale_size, 1, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM);
-    if (!scale_buf) {
-        ESP_LOGE("xx", "no mem for scale_buf");
+    size_t ppa_size = PPA_BUF_H * PPA_BUF_W * 4 * 2;
+    uint8_t* ppa_buf = heap_caps_calloc(ppa_size, 1, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM);
+    if (!ppa_buf) {
+        ESP_LOGE("xx", "no mem for ppa_buf");
         return ;
     }
 
@@ -350,12 +363,12 @@ void app_main(void)
 					//	jpeg_buf, jpeg_size,
 						(uint8_t*)image_jpg_start, image_jpg_end-image_jpg_start,
 						raw_buf, raw_size,
-						scale_buf, scale_size);
+						ppa_buf, ppa_size);
 
 
 	vTaskDelay(10000 / portTICK_PERIOD_MS);
 
-    free(scale_buf);
+    free(ppa_buf);
 	free(raw_buf);
 
     ESP_ERROR_CHECK(ppa_unregister_client(ppa_srm_handle));

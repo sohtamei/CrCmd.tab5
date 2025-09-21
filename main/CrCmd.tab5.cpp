@@ -54,14 +54,6 @@ struct _Param {
 
 #define TIMEOUT_MS 100
 
-#define SetL32(buf,data) {uint32_t d=(data);(buf)[0]=(d);(buf)[1]=(d)>>8;(buf)[2]=(d)>>16;(buf)[3]=(d)>>24;}
-#define SetL16(buf,data) {uint32_t d=(data);(buf)[0]=(d);(buf)[1]=(d)>>8;}
-
-#define GetL32(buf) (((buf)[0]<<0)|((buf)[1]<<8)|((buf)[2]<<16)|((buf)[3]<<24))
-#define GetL16(buf) (((buf)[0]<<0)|((buf)[1]<<8))
-
-#define numof(a) (sizeof(a)/sizeof((a)[0]))
-
 enum {
 	EVENT_NewDev  = 0x01,
 	EVENT_CloseDev = 0x20,
@@ -364,7 +356,8 @@ static int usb_ptp_transfer(uint32_t pcode,
 		if(inbuf && insize) {
 			if(xfer_in->actual_num_bytes > 12 && GetL16(xfer_in->data_buffer+0) == xfer_in->actual_num_bytes) {
 				*insize = xfer_in->actual_num_bytes-12;
-				*inbuf = (uint8_t*)malloc(*insize);
+			//	*inbuf = (uint8_t*)malloc(*insize);
+				*inbuf = (uint8_t*)heap_caps_malloc(*insize, (MALLOC_CAP_DMA | MALLOC_CAP_CACHE_ALIGNED | MALLOC_CAP_SPIRAM));
 				if(!*inbuf) ESP_LOGE(TAG, "alloc error %ld", *insize);
 				memcpy(*inbuf, xfer_in->data_buffer+12, *insize);
 			} else {
@@ -539,7 +532,7 @@ static int updateDeviceProp(int onlyDiff)
 			break;
 		}
 		if(index >= 0) {
-			ESP_LOGI(TAG, "%04x, %d,%d,%d,%d, %ld,%ld", pcode, datatype,getset,isenabled,formflag, paramTable[index].currentIndex,current);
+			ESP_LOGI(TAG, "DP:%04x, %d,%d,%d,%d, %ld,%ld", pcode, datatype,getset,isenabled,formflag, paramTable[index].currentIndex,current);
 			int led = (paramTable[index].isenabled==1 ? 0x101010: 0x000000);
 			if(paramTable[index].led != led) {
 				paramTable[index].led = led;
@@ -561,13 +554,13 @@ extern "C" void app_main(void)
     esp_dsi_resource_alloc(&mipi_dsi_bus, &mipi_dbi_io, &mipi_dpi_panel, NULL);
 
 	size_t raw_size;
-	jpeg_decode_memory_alloc_cfg_t rx_mem_cfg = { .buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER };
-	uint8_t* raw_buf = (uint8_t*)jpeg_alloc_decoder_mem(EXAMPLE_IMAGE_W*EXAMPLE_IMAGE_H*2, &rx_mem_cfg, &raw_size);
+	jpeg_decode_memory_alloc_cfg_t raw_buf_cfg = { .buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER };
+	uint8_t* raw_buf = (uint8_t*)jpeg_alloc_decoder_mem(RAW_BUF_W*RAW_BUF_H*2, &raw_buf_cfg, &raw_size);
 
-    size_t scale_size = EXAMPLE_IMAGE_H * EXAMPLE_IMAGE_W * 4 * 2;
-    uint8_t* scale_buf = (uint8_t*)heap_caps_calloc(scale_size, 1, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM);
-    if (!scale_buf) {
-        ESP_LOGE("xx", "no mem for scale_buf");
+    size_t ppa_size = PPA_BUF_H * PPA_BUF_W * 2;
+    uint8_t* ppa_buf = (uint8_t*)heap_caps_calloc(ppa_size, 1, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM);
+    if (!ppa_buf) {
+        ESP_LOGE("xx", "no mem for ppa_buf");
         return ;
     }
 
@@ -629,8 +622,8 @@ extern "C" void app_main(void)
 
 	// set up parametors
 	uint8_t buf[32];
-	buf[0] = 0x01;			// PC Remote
-	usb_ptp_transfer(PTP_OC_SDIOSetExtDevicePropValue, 2, DPC_POSITION_KEY,1,0,0,0, buf,1, NULL,NULL);
+//	buf[0] = 0x01;			// PC Remote
+//	usb_ptp_transfer(PTP_OC_SDIOSetExtDevicePropValue, 2, DPC_POSITION_KEY,1,0,0,0, buf,1, NULL,NULL);
 
 	SetL16(buf, 0x0010);	// Camera
 	usb_ptp_transfer(PTP_OC_SDIOSetExtDevicePropValue, 2, DPC_SAVE_MEDIA,1,0,0,0, buf,2, NULL,NULL);
@@ -639,6 +632,7 @@ extern "C" void app_main(void)
 	usb_ptp_transfer(PTP_OC_SDIOSetExtDevicePropValue, 2, DPC_USB_POWER_SUPPLY,1,0,0,0, buf,1, NULL,NULL);
 
 	buf[0] = 0x01;			// low
+//	buf[0] = 0x02;			// high
 	usb_ptp_transfer(PTP_OC_SDIOSetExtDevicePropValue, 2, DPC_LIVEVIEW_MODE,1,0,0,0, buf,1, NULL,NULL);
 
 	vTaskDelay(100);
@@ -704,12 +698,14 @@ extern "C" void app_main(void)
 		display_jpeg(jpgd_handle, ppa_srm_handle, mipi_dpi_panel,
 							lv_buf+lv_offset, lv_size,
 							raw_buf, raw_size,
-							scale_buf, scale_size);
+							ppa_buf, ppa_size);
 
 		if(lv_buf) free(lv_buf);
 
 		time3 = esp_timer_get_time() - base_time;
 		printf("%6ld,%6ld,%ld\n", time1, time2-time1, time3-time2);
+
+		vTaskDelay(1);
 	}
 
 	vTaskDelay(200);
@@ -727,7 +723,7 @@ extern "C" void app_main(void)
 	vTaskDelete(class_driver_task_hdl);
 	vTaskDelete(daemon_task_hdl);
 
-    free(scale_buf);
+    free(ppa_buf);
 	free(raw_buf);
 
     ESP_ERROR_CHECK(ppa_unregister_client(ppa_srm_handle));

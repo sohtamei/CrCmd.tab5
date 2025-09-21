@@ -13,16 +13,19 @@
 extern "C" {
 #endif
 
-#define size_mul 1.5
-#define mul      1.5
+#define SetL32(buf,data) {uint32_t d=(data);(buf)[0]=(d);(buf)[1]=(d)>>8;(buf)[2]=(d)>>16;(buf)[3]=(d)>>24;}
+#define SetL16(buf,data) {uint32_t d=(data);(buf)[0]=(d);(buf)[1]=(d)>>8;}
 
-#if 1
-#define EXAMPLE_IMAGE_W  640
-#define EXAMPLE_IMAGE_H  424
-#else
-#define EXAMPLE_IMAGE_W  320
-#define EXAMPLE_IMAGE_H  240
-#endif
+#define GetL32(buf) (((buf)[0]<<0)|((buf)[1]<<8)|((buf)[2]<<16)|((buf)[3]<<24))
+#define GetL16(buf) (((buf)[0]<<0)|((buf)[1]<<8))
+
+#define numof(a) (sizeof(a)/sizeof((a)[0]))
+
+
+#define RAW_BUF_W  1024
+#define RAW_BUF_H  1024
+#define PPA_BUF_W  1280
+#define PPA_BUF_H   720
 
 esp_err_t _init_port(void);
 
@@ -34,7 +37,7 @@ esp_err_t display_jpeg(	jpeg_decoder_handle_t jpgd_handle,
 						esp_lcd_panel_handle_t mipi_dpi_panel,
 						uint8_t* jpeg_buf, uint32_t jpeg_size,
 						uint8_t* raw_buf, size_t raw_size,
-						uint8_t* scale_buf, size_t scale_size);
+						uint8_t* ppa_buf, size_t ppa_size);
 
 
 #ifdef __cplusplus
