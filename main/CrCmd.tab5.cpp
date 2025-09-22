@@ -32,6 +32,15 @@ static const char *TAG = "DAEMON";
 
 #define PARAM_NUM  5
 
+#include "esp_memory_utils.h"
+void checkArea(int line, const void* dp)
+{
+	if(esp_ptr_internal(dp)) printf("(%d)I-RAM\n", line);
+	else if(esp_ptr_external_ram(dp)) printf("(%d)PSRAM\n", line);
+	else printf("(%d)unknown\n", line);
+	return;
+}
+
 struct _Param {
 	uint16_t pcode;
 	uint16_t datatype;
@@ -82,7 +91,7 @@ static int updateDeviceProp(int onlyDiff);
 
 //------------ usb host ------------
 
-#define RECV_BUFFER  0x10000//32768
+#define RECV_BUFFER  0x1F000//0x20000-NG
 #define BULK_IN_EP_ADDR		0x81
 #define BULK_OUT_EP_ADDR	0x02
 #define INT_IN_EP_ADDR		0x83
@@ -354,7 +363,7 @@ static int usb_ptp_transfer(uint32_t pcode,
 	//	int size = xfer_in->actual_num_bytes; if(size >= 32) size = 32;
 	//	ESP_LOG_BUFFER_HEXDUMP(TAG, xfer_in->data_buffer, size, ESP_LOG_INFO);
 		if(inbuf && insize) {
-			if(xfer_in->actual_num_bytes > 12 && GetL16(xfer_in->data_buffer+0) == xfer_in->actual_num_bytes) {
+			if(xfer_in->actual_num_bytes > 12 && GetL32(xfer_in->data_buffer+0) == xfer_in->actual_num_bytes) {
 				*insize = xfer_in->actual_num_bytes-12;
 			//	*inbuf = (uint8_t*)malloc(*insize);
 				*inbuf = (uint8_t*)heap_caps_malloc(*insize, (MALLOC_CAP_DMA | MALLOC_CAP_CACHE_ALIGNED | MALLOC_CAP_SPIRAM));
@@ -362,6 +371,7 @@ static int usb_ptp_transfer(uint32_t pcode,
 				memcpy(*inbuf, xfer_in->data_buffer+12, *insize);
 			} else {
 				ESP_LOGE(TAG, "recv error");
+				return -1;
 			}
 		}
 
@@ -556,13 +566,11 @@ extern "C" void app_main(void)
 	size_t raw_size;
 	jpeg_decode_memory_alloc_cfg_t raw_buf_cfg = { .buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER };
 	uint8_t* raw_buf = (uint8_t*)jpeg_alloc_decoder_mem(RAW_BUF_W*RAW_BUF_H*2, &raw_buf_cfg, &raw_size);
+    if (!raw_buf) { ESP_LOGE("xx", "no mem for raw_buf"); return; }
 
     size_t ppa_size = PPA_BUF_H * PPA_BUF_W * 2;
     uint8_t* ppa_buf = (uint8_t*)heap_caps_calloc(ppa_size, 1, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM);
-    if (!ppa_buf) {
-        ESP_LOGE("xx", "no mem for ppa_buf");
-        return ;
-    }
+    if (!ppa_buf) { ESP_LOGE("xx", "no mem for ppa_buf"); return; }
 
 	jpeg_decoder_handle_t jpgd_handle;
 	jpeg_decode_engine_cfg_t decode_eng_cfg = {
@@ -631,8 +639,8 @@ extern "C" void app_main(void)
 	buf[0] = 0x01;			// off
 	usb_ptp_transfer(PTP_OC_SDIOSetExtDevicePropValue, 2, DPC_USB_POWER_SUPPLY,1,0,0,0, buf,1, NULL,NULL);
 
-	buf[0] = 0x01;			// low
-//	buf[0] = 0x02;			// high
+//	buf[0] = 0x01;			// low
+	buf[0] = 0x02;			// high
 	usb_ptp_transfer(PTP_OC_SDIOSetExtDevicePropValue, 2, DPC_LIVEVIEW_MODE,1,0,0,0, buf,1, NULL,NULL);
 
 	vTaskDelay(100);
@@ -676,7 +684,7 @@ extern "C" void app_main(void)
 		uint8_t* lv_buf = NULL;
 		uint32_t lv_buf_size = 0;
 		ret = usb_ptp_transfer(PTP_OC_GetObject, 1, 0xFFFFC002,0,0,0,0, NULL,0, &lv_buf, &lv_buf_size);
-		if(ret) break;
+		if(ret) continue;
 
 		time2 = esp_timer_get_time() - base_time;
 		/*
@@ -705,7 +713,7 @@ extern "C" void app_main(void)
 		time3 = esp_timer_get_time() - base_time;
 		printf("%6ld,%6ld,%ld\n", time1, time2-time1, time3-time2);
 
-		vTaskDelay(1);
+	//	vTaskDelay(1);
 	}
 
 	vTaskDelay(200);
