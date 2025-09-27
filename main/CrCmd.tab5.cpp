@@ -18,10 +18,13 @@
 #include "driver/ppa.h"
 #include "driver/jpeg_decode.h"
 #include "usb/usb_host.h"
+#define LGFX_USE_V1
+#include <LovyanGFX.hpp>
 
 #include "PTPDef.h"
 #include "_8encoder.h"
 #include "ppa_dsi_main.h"
+#include "lgfx.h"
 
 static const char *TAG = "DAEMON";
 
@@ -31,7 +34,7 @@ static const char *TAG = "DAEMON";
 #define CLIENT_NUM_EVENT_MSG    5
 
 #define PARAM_NUM  5
-
+/*
 #include "esp_memory_utils.h"
 void checkArea(int line, const void* dp)
 {
@@ -40,7 +43,7 @@ void checkArea(int line, const void* dp)
 	else printf("(%d)unknown\n", line);
 	return;
 }
-
+*/
 struct _Param {
 	uint16_t pcode;
 	uint16_t datatype;
@@ -87,7 +90,8 @@ usb_transfer_t *event_in = NULL;
 
 static int updateDeviceProp(int onlyDiff);
 
-
+static char g_linebuf[128] = {0};
+struct rect rects[128];
 
 //------------ usb host ------------
 
@@ -389,6 +393,81 @@ static int usb_ptp_transfer(uint32_t pcode,
 
 //-------------------- client ------------------
 
+/*
+double Round(double value, int figure)
+{
+    bool isNegative = ( value < 0 );
+    if (isNegative == true) value = -value;
+    double rate = pow(10.0, figure);
+    long tmp = (long)(value * rate + 0.5);
+    value = tmp/rate;
+    if (isNegative == true) value = -value;
+    return value;
+}
+*/
+void format_f_number(char* linebuf, uint32_t f_number)
+{
+    if ((0x0000 == f_number) || (CrFnumber_Unknown == f_number)) {
+        sprintf(linebuf, "--");
+    } else if(CrFnumber_Nothing == f_number) {
+
+    } else {
+        auto modValue = static_cast<uint16_t>(f_number % 100);
+        if (modValue > 0) {
+          //sprintf(linebuf, "F%.1f", Round((f_number / 100.0), 1));
+            sprintf(linebuf, "F%.1f", f_number / 100.0);
+        }
+        else {
+            sprintf(linebuf, "F%ld", f_number / 100);
+        }
+    }
+}
+
+void format_iso_sensitivity(char* linebuf, uint32_t iso)
+{
+//	uint32_t iso_ext = (iso >> 24) & 0x000000F0;  // bit 28-31
+//	uint32_t iso_mode = (iso >> 24) & 0x0000000F; // bit 24-27
+	uint32_t iso_value = (iso & 0x00FFFFFF);	  // bit  0-23
+/*
+	if (iso_mode == CrISO_MultiFrameNR) {
+		ss << "MultiFrameNR_";
+	}
+	else if (iso_mode == CrISO_MultiFrameNR_High) {
+		ss << "MultiFrameNR_High_";
+	}
+*/
+	if (iso_value == CrISO_AUTO) {
+		sprintf(linebuf, "ISO-AUTO");
+	}
+	else {
+		sprintf(linebuf, "ISO-%ld", iso_value);
+	}
+
+	//if (iso_ext == CrISO_Ext) {
+	//	ss << " (EXT)";
+	//}
+}
+
+void format_shutter_speed(char* linebuf, uint32_t shutter_speed)
+{
+    uint16_t numerator   = static_cast<uint16_t>((shutter_speed >> 16) & 0xFFFF);
+    uint16_t denominator = static_cast<uint16_t>(shutter_speed & 0xFFFF);
+
+    if (0 == shutter_speed) {
+        sprintf(linebuf, "Bulb");
+    } else if (0 == denominator) {
+        sprintf(linebuf, "error");
+    } else if (1 == numerator) {
+        sprintf(linebuf, "%d/%d", numerator, denominator);
+    } else if (0 == numerator % denominator) {
+        sprintf(linebuf, "%d\"", numerator / denominator);
+    } else {
+        int32_t numdivision = numerator / denominator;
+        int32_t numremainder = numerator % denominator;
+        sprintf(linebuf, "%ld.%ld", numdivision, numremainder);
+    }
+}
+
 int incParam(int index, int diff)
 {
 	if(paramTable[index].isenabled != 1) return -1;
@@ -551,40 +630,96 @@ static int updateDeviceProp(int onlyDiff)
 		}
 	}
 	if(recv_buf) free(recv_buf);
+
+	memset(g_linebuf, ' ', sizeof(g_linebuf)-1);
+	g_linebuf[sizeof(g_linebuf)-1] = 0;
+
+	format_shutter_speed(g_linebuf+0, paramTable[0].current);
+	format_f_number(g_linebuf+7, paramTable[1].current);
+	if(paramTable[2].current >= 0)
+		sprintf(g_linebuf+12, "+%.1f", paramTable[2].current/1000.0);
+	else
+		sprintf(g_linebuf+12, "%.1f", paramTable[2].current/1000.0);
+	format_iso_sensitivity(g_linebuf+17, paramTable[3].current);
+
+	for(int i = 0; i < sizeof(g_linebuf)-1; i++)
+		if(g_linebuf[i] == 0) g_linebuf[i] = ' ';
+//	printf("%s\n", g_linebuf);
+
 	return 0;
 }
 
+#if 1
+void parseLvProp(const uint8_t* buf, int bufSize, struct rect* rect, int rectSize, int* rectCount)
+{
+	int ver = GetL16(buf);
+	int framesNum = 0;
+	switch(ver) {
+	case 101:
+	case 102:
+		framesNum = 3;
+		break;
+	case 103:
+	case 104:
+		framesNum = 4;
+		break;
+	default:
+		ESP_LOGE(TAG, "(%d)illegal prop", __LINE__);
+		return;
+	}
+
+	/*
+	type FocalFrameInfo {
+		+0		Version(2)		// Data version (100x value)
+		+2		reserved(6)
+		+8		reserved(8+24)
+		+40		reserved Frame(16+24*0)
+
+		+56		FocusFrame:
+				FaceFrames:		// Version 1.01 or later
+				TrackingFrames:	// Version 1.01 or later
+				FramingFrames:	// Version 1.03 or later
+	};
+	*/
+	const uint8_t* dp = buf + 56;
+
+	*rectCount = 0;
+
+	for(int i = 0; i < framesNum; i++) {
+		struct focalFrames* frames = (struct focalFrames*)dp;
+
+		if(frames->x_denominator != (640*1024) || frames->y_denominator != (480*1024)) {
+			ESP_LOGE(TAG, "(%d)illegal prop", __LINE__);
+			return;
+		}
+
+		for(int j = 0; j < frames->frameNum; j++) {
+			struct rect* rect = &rects[*rectCount];
+			rect->x = frames->frames[j].x_numerator;
+			rect->y = frames->frames[j].y_numerator;
+			rect->w = frames->frames[j].width;
+			rect->h = frames->frames[j].height;
+
+			switch(i) {
+			case 0:  rect->color = LGFX_TFT_GREEN; break;		// FocusFrame
+			case 1:  rect->color = LGFX_TFT_WHITE; break;		// FaceFrames
+			case 2:  rect->color = LGFX_TFT_WHITE; break;		// TrackingFrames
+			case 3:  rect->color = LGFX_TFT_WHITE; break;		// FramingFrames
+			}
+			(*rectCount)++;
+			if(*rectCount >= rectSize) return;
+		}
+		dp += 16/*focalFrames*/ + sizeof(struct focalFrame) * frames->frameNum;
+		if(dp + 16 >= buf + bufSize) return;
+	}
+}
+#endif
+
 extern "C" void app_main(void)
 {
-	_init_port();
+	ESP_ERROR_CHECK(dsi_init());
 
-    esp_lcd_dsi_bus_handle_t  mipi_dsi_bus = NULL;
-    esp_lcd_panel_io_handle_t mipi_dbi_io = NULL;
-    esp_lcd_panel_handle_t    mipi_dpi_panel = NULL;
-    esp_dsi_resource_alloc(&mipi_dsi_bus, &mipi_dbi_io, &mipi_dpi_panel, NULL);
-
-	size_t raw_size;
-	jpeg_decode_memory_alloc_cfg_t raw_buf_cfg = { .buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER };
-	uint8_t* raw_buf = (uint8_t*)jpeg_alloc_decoder_mem(RAW_BUF_W*RAW_BUF_H*2, &raw_buf_cfg, &raw_size);
-    if (!raw_buf) { ESP_LOGE("xx", "no mem for raw_buf"); return; }
-
-    size_t ppa_size = PPA_BUF_H * PPA_BUF_W * 2;
-    uint8_t* ppa_buf = (uint8_t*)heap_caps_calloc(ppa_size, 1, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM);
-    if (!ppa_buf) { ESP_LOGE("xx", "no mem for ppa_buf"); return; }
-
-	jpeg_decoder_handle_t jpgd_handle;
-	jpeg_decode_engine_cfg_t decode_eng_cfg = {
-		.intr_priority = 0,
-		.timeout_ms = 40,
-	};
-	jpeg_new_decoder_engine(&decode_eng_cfg, &jpgd_handle);
-
-    ppa_client_handle_t ppa_srm_handle = NULL;
-    ppa_client_config_t ppa_srm_config = {
-        .oper_type = PPA_OPERATION_SRM,
-        .max_pending_trans_num = 1,
-    };
-    ESP_ERROR_CHECK(ppa_register_client(&ppa_srm_config, &ppa_srm_handle));
+	lgfx_init(RAW_BUF_W, RAW_BUF_H);
 
 	usb_host_init();
 
@@ -683,7 +818,7 @@ extern "C" void app_main(void)
 
 		uint8_t* lv_buf = NULL;
 		uint32_t lv_buf_size = 0;
-		ret = usb_ptp_transfer(PTP_OC_GetObject, 1, 0xFFFFC002,0,0,0,0, NULL,0, &lv_buf, &lv_buf_size);
+		ret = usb_ptp_transfer(PTP_OC_GetObject, 1, 0xFFFFC002,0,0,0,0, NULL,0, &lv_buf, &lv_buf_size);		// liveview
 		if(ret) continue;
 
 		time2 = esp_timer_get_time() - base_time;
@@ -702,12 +837,14 @@ extern "C" void app_main(void)
 		*/
 		int lv_offset = GetL32(lv_buf+0);
 		int lv_size   = GetL32(lv_buf+4);
+		int prop_offset = GetL32(lv_buf+8);
+		int prop_size   = GetL32(lv_buf+12);
 
-		display_jpeg(jpgd_handle, ppa_srm_handle, mipi_dpi_panel,
-							lv_buf+lv_offset, lv_size,
-							raw_buf, raw_size,
-							ppa_buf, ppa_size);
+//	for(int i = 0; i < prop_size; i++) {printf("%02x", lv_buf[prop_offset+i]);} printf("\n");
+		int rectCount = 0;
+		parseLvProp(lv_buf+prop_offset, prop_size, rects, numof(rects), &rectCount);
 
+		display_jpeg(lv_buf+lv_offset, lv_size, g_linebuf, rects, rectCount);
 		if(lv_buf) free(lv_buf);
 
 		time3 = esp_timer_get_time() - base_time;
@@ -731,12 +868,7 @@ extern "C" void app_main(void)
 	vTaskDelete(class_driver_task_hdl);
 	vTaskDelete(daemon_task_hdl);
 
-    free(ppa_buf);
-	free(raw_buf);
-
-    ESP_ERROR_CHECK(ppa_unregister_client(ppa_srm_handle));
-	jpeg_del_decoder_engine(jpgd_handle);
-    esp_dsi_resource_destroy(mipi_dsi_bus, mipi_dbi_io, mipi_dpi_panel);
+	dsi_close();
 }
 
 /*

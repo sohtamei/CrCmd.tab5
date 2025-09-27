@@ -20,7 +20,7 @@ int _8encoder_init(void)
 		.scl_io_num = PORT_SCL,
 		.sda_pullup_en = GPIO_PULLUP_ENABLE,
 		.scl_pullup_en = GPIO_PULLUP_ENABLE,
-		.master = { .clk_speed = 10000 },
+		.master = { .clk_speed = 400000 },
 		.clk_flags = 0,
 	};
 	i2c_param_config(I2C_PORT, &i2c_conf);

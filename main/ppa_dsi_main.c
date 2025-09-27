@@ -24,7 +24,22 @@
 
 #include "ppa_dsi_main.h"
 
+#include "lgfx.h"
 
+
+static esp_lcd_dsi_bus_handle_t  mipi_dsi_bus = NULL;
+static esp_lcd_panel_io_handle_t mipi_dbi_io = NULL;
+static esp_lcd_panel_handle_t    mipi_dpi_panel = NULL;
+
+static jpeg_decoder_handle_t jpgd_handle = NULL;
+static ppa_client_handle_t ppa_srm_handle = NULL;
+static ppa_client_handle_t ppa_blend_handle = NULL;
+
+static size_t raw_size = 0;
+static uint8_t* raw_buf = NULL;
+
+static size_t ppa_size = PPA_BUF_H * PPA_BUF_W * 2;
+static uint8_t* ppa_buf = NULL;
 
 
 #define E1_ADDR			0x43  // ADDR=GND
@@ -138,10 +153,14 @@ esp_err_t _init_port(void)
 	return ESP_OK;
 }
 
-
-void esp_dsi_resource_alloc(esp_lcd_dsi_bus_handle_t *mipi_dsi_bus, esp_lcd_panel_io_handle_t *mipi_dbi_io, esp_lcd_panel_handle_t *mipi_dpi_panel, void **frame_buffer)
+esp_err_t dsi_init(void)
 {
-	#define USED_LDO_CHAN_ID 3
+	_init_port();
+
+	uint8_t* frame_buffer = NULL;
+//	esp_dsi_resource_alloc(&mipi_dsi_bus, &mipi_dbi_io, &mipi_dpi_panel, (void**)&frame_buffer);
+
+	#define USED_LDO_CHAN_ID    3			// LDO_VO3 is connected to VDD_MIPI_DPHY
 	#define USED_LDO_VOLTAGE_MV 2500
 
     esp_ldo_channel_handle_t ldo_mipi_phy = NULL;
@@ -151,18 +170,6 @@ void esp_dsi_resource_alloc(esp_lcd_dsi_bus_handle_t *mipi_dsi_bus, esp_lcd_pane
     };
     ESP_ERROR_CHECK(esp_ldo_acquire_channel(&ldo_mipi_phy_config, &ldo_mipi_phy));
 
-
-	#define BSP_MIPI_DSI_PHY_PWR_LDO_CHAN       (3)    // LDO_VO3 is connected to VDD_MIPI_DPHY
-	#define BSP_MIPI_DSI_PHY_PWR_LDO_VOLTAGE_MV (2500)
-
-	esp_ldo_channel_handle_t phy_pwr_chan = NULL;
-	esp_ldo_channel_config_t ldo_cfg;
-	memset(&ldo_cfg, 0, sizeof(ldo_cfg));
-	ldo_cfg.chan_id = BSP_MIPI_DSI_PHY_PWR_LDO_CHAN;
-	ldo_cfg.voltage_mv = BSP_MIPI_DSI_PHY_PWR_LDO_VOLTAGE_MV;
-
-	esp_ldo_acquire_channel(&ldo_cfg, &phy_pwr_chan);
-
     //---------------DSI resource allocation------------------//
     esp_lcd_dsi_bus_config_t bus_config = {
         .bus_id = 0,
@@ -170,14 +177,14 @@ void esp_dsi_resource_alloc(esp_lcd_dsi_bus_handle_t *mipi_dsi_bus, esp_lcd_pane
         .phy_clk_src = MIPI_DSI_PHY_CLK_SRC_DEFAULT,
         .lane_bit_rate_mbps = 730, // 1000 Mbps
     };
-    ESP_ERROR_CHECK(esp_lcd_new_dsi_bus(&bus_config, mipi_dsi_bus));
+    ESP_ERROR_CHECK(esp_lcd_new_dsi_bus(&bus_config, &mipi_dsi_bus));
 
     esp_lcd_dbi_io_config_t dbi_config = {
         .virtual_channel = 0,
         .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
     };
-    ESP_ERROR_CHECK(esp_lcd_new_panel_io_dbi(*mipi_dsi_bus, &dbi_config, mipi_dbi_io));
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_dbi(mipi_dsi_bus, &dbi_config, &mipi_dbi_io));
 
 #if 1  // M5GFX
     esp_lcd_dpi_panel_config_t dpi_config = {
@@ -209,7 +216,7 @@ void esp_dsi_resource_alloc(esp_lcd_dsi_bus_handle_t *mipi_dsi_bus, esp_lcd_pane
 
     ili9881c_vendor_config_t vendor_config = {
         .mipi_config = {
-            .dsi_bus = *mipi_dsi_bus,
+            .dsi_bus = mipi_dsi_bus,
             .dpi_config = &dpi_config,
             .lane_num = 2,
         },
@@ -220,16 +227,51 @@ void esp_dsi_resource_alloc(esp_lcd_dsi_bus_handle_t *mipi_dsi_bus, esp_lcd_pane
         .bits_per_pixel = 16,
         .vendor_config = &vendor_config,
     };
-    ESP_ERROR_CHECK(esp_lcd_new_panel_ili9881c(*mipi_dbi_io, &lcd_dev_config, mipi_dpi_panel));
+    ESP_ERROR_CHECK(esp_lcd_new_panel_ili9881c(mipi_dbi_io, &lcd_dev_config, &mipi_dpi_panel));
 
-    ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(*mipi_dpi_panel, 1, frame_buffer));
+    ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(mipi_dpi_panel, 1, (void**)&frame_buffer));
 
-    ESP_ERROR_CHECK(esp_lcd_panel_reset(*mipi_dpi_panel));
-    ESP_ERROR_CHECK(esp_lcd_panel_init(*mipi_dpi_panel));
+    ESP_ERROR_CHECK(esp_lcd_panel_reset(mipi_dpi_panel));
+    ESP_ERROR_CHECK(esp_lcd_panel_init(mipi_dpi_panel));
+
+	/* jpeg, ppa */
+
+	jpeg_decode_memory_alloc_cfg_t raw_buf_cfg = { .buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER };
+	raw_buf = (uint8_t*)jpeg_alloc_decoder_mem(RAW_BUF_W * RAW_BUF_H * 2, &raw_buf_cfg, &raw_size);
+    if (!raw_buf) { ESP_LOGE("xx", "no mem for raw_buf"); return -1; }
+
+    ppa_buf = heap_caps_calloc(ppa_size, 1, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM);
+    if (!ppa_buf) { ESP_LOGE("xx", "no mem for ppa_buf"); return -1; }
+
+	jpeg_decode_engine_cfg_t decode_eng_cfg = {
+		.intr_priority = 0,
+		.timeout_ms = 40,
+	};
+	jpeg_new_decoder_engine(&decode_eng_cfg, &jpgd_handle);
+
+    ppa_client_config_t ppa_srm_config = {
+        .oper_type = PPA_OPERATION_SRM,
+        .max_pending_trans_num = 1,
+    };
+    ESP_ERROR_CHECK(ppa_register_client(&ppa_srm_config, &ppa_srm_handle));
+
+    ppa_client_config_t ppa_blend_config = {
+        .oper_type = PPA_OPERATION_BLEND,
+        .max_pending_trans_num = 1,
+    };
+    ESP_ERROR_CHECK(ppa_register_client(&ppa_blend_config, &ppa_blend_handle));
+
+	return 0;
 }
 
-void esp_dsi_resource_destroy(esp_lcd_dsi_bus_handle_t mipi_dsi_bus, esp_lcd_panel_io_handle_t mipi_dbi_io, esp_lcd_panel_handle_t mipi_dpi_panel)
+void dsi_close(void)
 {
+    free(ppa_buf);
+	free(raw_buf);
+
+    ESP_ERROR_CHECK(ppa_unregister_client(ppa_srm_handle));
+    ESP_ERROR_CHECK(ppa_unregister_client(ppa_blend_handle));
+	jpeg_del_decoder_engine(jpgd_handle);
     ESP_ERROR_CHECK(esp_lcd_panel_del(mipi_dpi_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_io_del(mipi_dbi_io));
     ESP_ERROR_CHECK(esp_lcd_del_dsi_bus(mipi_dsi_bus));
@@ -237,12 +279,8 @@ void esp_dsi_resource_destroy(esp_lcd_dsi_bus_handle_t mipi_dsi_bus, esp_lcd_pan
 
 //-------------------------------------------------------------------------------------
 
-esp_err_t display_jpeg(	jpeg_decoder_handle_t jpgd_handle,
-						ppa_client_handle_t ppa_srm_handle,
-						esp_lcd_panel_handle_t mipi_dpi_panel,
-						uint8_t* jpeg_buf, uint32_t jpeg_size,
-						uint8_t* raw_buf, size_t raw_size,
-						uint8_t* ppa_buf, size_t ppa_size)
+static int last_rectCount = 0;
+esp_err_t display_jpeg(const uint8_t* jpeg_buf, uint32_t jpeg_size, const char* linebuf, const struct rect* rects, int rectCount)
 {
 	struct {
 		int  out_size;
@@ -262,8 +300,8 @@ esp_err_t display_jpeg(	jpeg_decoder_handle_t jpgd_handle,
 		{1024*768*2, 1024,768,  960, 160, 720.0/768},		// 4:3
 		{1024*1024*2,1024,1024, 720, 280, 720.0/1024},		// 1:1
 	};
-//	uint64_t base_time = 0;
-//	base_time = esp_timer_get_time();
+	uint64_t base_time = 0;
+	base_time = esp_timer_get_time();
 
 	jpeg_decode_cfg_t jpeg_decode_cfg = {
 		.output_format = JPEG_DECODE_OUT_FORMAT_RGB565,
@@ -282,37 +320,110 @@ esp_err_t display_jpeg(	jpeg_decoder_handle_t jpgd_handle,
 	}
 	if(i >= numof(paramTable)) return -1;
 
-    ppa_srm_oper_config_t srm_config = {
-        .in.buffer = (uint16_t*)raw_buf,
-        .in.pic_w = paramTable[i].raw_width,
-        .in.pic_h = paramTable[i].raw_height,
-        .in.block_w = paramTable[i].raw_width,
-        .in.block_h = paramTable[i].raw_height,
-        .in.block_offset_x = 0,
-        .in.block_offset_y = 0,
-        .in.srm_cm = PPA_SRM_COLOR_MODE_RGB565,
-        .out.buffer = ppa_buf,
-        .out.buffer_size = ppa_size,
-        .out.pic_w = PPA_BUF_H,
-        .out.pic_h = paramTable[i].ppa_width,
-        .out.block_offset_x = 0,
-        .out.block_offset_y = 0,
-        .out.srm_cm = PPA_SRM_COLOR_MODE_RGB565,
-        .rotation_angle = PPA_SRM_ROTATION_ANGLE_90,
-        .scale_x = paramTable[i].scale,
-        .scale_y = paramTable[i].scale,
-        .rgb_swap = 0,
-        .byte_swap = 1,
-        .mode = PPA_TRANS_MODE_BLOCKING,
-    };
-    ESP_ERROR_CHECK(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
+	//---------------BLEND------------------//
+#if 1
+	if(rectCount || last_rectCount) {
+		lgfx_fillScreen(LGFX_TFT_BLACK);
+		for(int j = 0; j < rectCount; j++) {
+			lgfx_drawRect(
+				rects[j].x*paramTable[i].raw_width /640/1024,	// 640->width
+				rects[j].y*paramTable[i].raw_height/480/1024,	// 480->height
+				rects[j].w*paramTable[i].raw_width /640/1024,
+				rects[j].h*paramTable[i].raw_height/480/1024,
+				rects[j].color);
+		}
+	}
+	last_rectCount = rectCount;
 
-    ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(mipi_dpi_panel,
-    										0, paramTable[i].x_offset,
-    										srm_config.out.pic_w, paramTable[i].x_offset + srm_config.out.pic_h,
-    										ppa_buf));
+	lgfx_drawString(linebuf, 10, paramTable[i].raw_height - 10);
 
-//	printf("%6ld\n", (uint32_t)(esp_timer_get_time() - base_time));
+	//this operation will blend the bg_buf with the fg_buf
+	ppa_blend_oper_config_t blend_config = {
+		.in_bg.buffer = raw_buf,
+		.in_bg.pic_w = paramTable[i].raw_width,
+		.in_bg.pic_h = paramTable[i].raw_height,
+		.in_bg.block_w = paramTable[i].raw_width,
+		.in_bg.block_h = paramTable[i].raw_height,
+		.in_bg.block_offset_x = 0,
+		.in_bg.block_offset_y = 0,
+		.in_bg.blend_cm = PPA_BLEND_COLOR_MODE_RGB565,
+		.in_fg.buffer = lgfx_getBuffer(),
+		.in_fg.pic_w = paramTable[i].raw_width,
+		.in_fg.pic_h = paramTable[i].raw_height,
+		.in_fg.block_w = paramTable[i].raw_width,
+		.in_fg.block_h = paramTable[i].raw_height,
+		.in_fg.block_offset_x = 0,
+		.in_fg.block_offset_y = 0,
+		.in_fg.blend_cm = PPA_BLEND_COLOR_MODE_RGB565,
+		.out.buffer = raw_buf,
+		.out.buffer_size = raw_size,
+		.out.pic_w = paramTable[i].raw_width,
+		.out.pic_h = paramTable[i].raw_height,
+		.out.block_offset_x = 0,
+		.out.block_offset_y = 0,
+		.out.blend_cm = PPA_BLEND_COLOR_MODE_RGB565,
+		.bg_rgb_swap = 0,
+		.bg_byte_swap = 1,
+		.bg_alpha_update_mode = PPA_ALPHA_NO_CHANGE,
+
+	//	.bg_alpha_update_mode = PPA_ALPHA_SCALE,
+	//	.bg_alpha_scale_ratio = 0.9,
+
+	//	.bg_alpha_update_mode = PPA_ALPHA_FIX_VALUE,  // 215: invalid fg_alpha_fix_val
+	//	.bg_alpha_fix_val = 0,		// union
+		.bg_ck_en = false,
+
+		.fg_rgb_swap = 0,
+		.fg_byte_swap = 1,
+		.fg_alpha_update_mode = PPA_ALPHA_NO_CHANGE,
+
+	//	.fg_alpha_update_mode = PPA_ALPHA_SCALE,
+	//	.fg_alpha_scale_ratio = 0.5,
+
+	//	.fg_alpha_update_mode = PPA_ALPHA_FIX_VALUE,  // 215: invalid fg_alpha_fix_val
+	//	.fg_alpha_fix_val = 128,	// 0~255, union
+
+		.fg_fix_rgb_val = { .b = 0xd3, .g = 0x03, .r = 0xff, },
+		.fg_ck_en = true,
+		.fg_ck_rgb_low_thres = { .b = 0x00, .g = 0x00, .r = 0x00, },
+		.fg_ck_rgb_high_thres = { .b = 0x01, .g = 0x01, .r = 0x01, },
+		.mode = PPA_TRANS_MODE_BLOCKING,
+	};
+	ESP_ERROR_CHECK(ppa_do_blend(ppa_blend_handle, &blend_config));
+#endif
+//	ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(mipi_dpi_panel, 0, 0, paramTable[i].raw_width, paramTable[i].raw_height, raw_buf));
+
+	ppa_srm_oper_config_t srm_config = {
+		.in.buffer = (uint16_t*)raw_buf,
+		.in.pic_w = paramTable[i].raw_width,
+		.in.pic_h = paramTable[i].raw_height,
+		.in.block_w = paramTable[i].raw_width,
+		.in.block_h = paramTable[i].raw_height,
+		.in.block_offset_x = 0,
+		.in.block_offset_y = 0,
+		.in.srm_cm = PPA_SRM_COLOR_MODE_RGB565,
+		.out.buffer = ppa_buf,
+		.out.buffer_size = ppa_size,
+		.out.pic_w = PPA_BUF_H,
+		.out.pic_h = paramTable[i].ppa_width,
+		.out.block_offset_x = 0,
+		.out.block_offset_y = 0,
+		.out.srm_cm = PPA_SRM_COLOR_MODE_RGB565,
+		.rotation_angle = PPA_SRM_ROTATION_ANGLE_90,
+		.scale_x = paramTable[i].scale,
+		.scale_y = paramTable[i].scale,
+		.rgb_swap = 0,
+		.byte_swap = 0,
+		.mode = PPA_TRANS_MODE_BLOCKING,
+	};
+	ESP_ERROR_CHECK(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
+
+	ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(mipi_dpi_panel,
+											0, paramTable[i].x_offset,
+											srm_config.out.pic_w, paramTable[i].x_offset + srm_config.out.pic_h,
+											ppa_buf));
+
+	printf("%6ld\n", (uint32_t)(esp_timer_get_time() - base_time));
 	return 0;
 }
 
@@ -320,59 +431,16 @@ esp_err_t display_jpeg(	jpeg_decoder_handle_t jpgd_handle,
 extern const uint8_t image_jpg_start[] asm("_binary_image_jpg_start");
 extern const uint8_t image_jpg_end[] asm("_binary_image_jpg_end");
 
-#define EXAMPLE_IMAGE_W  640
-#define EXAMPLE_IMAGE_H  424
-
-
 void app_main(void)
 {
-	_init_port();
+	ESP_ERROR_CHECK(dsi_init());
 
-    esp_lcd_dsi_bus_handle_t  mipi_dsi_bus = NULL;
-    esp_lcd_panel_io_handle_t mipi_dbi_io = NULL;
-    esp_lcd_panel_handle_t    mipi_dpi_panel = NULL;
-    esp_dsi_resource_alloc(&mipi_dsi_bus, &mipi_dbi_io, &mipi_dpi_panel, NULL);
-
-	size_t raw_size;
-	jpeg_decode_memory_alloc_cfg_t rx_mem_cfg = { .buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER };
-	uint8_t* raw_buf = (uint8_t*)jpeg_alloc_decoder_mem(RAW_BUF_W*RAW_BUF_H*2, &raw_buf_cfg, &raw_size);
-
-    size_t ppa_size = PPA_BUF_H * PPA_BUF_W * 4 * 2;
-    uint8_t* ppa_buf = heap_caps_calloc(ppa_size, 1, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM);
-    if (!ppa_buf) {
-        ESP_LOGE("xx", "no mem for ppa_buf");
-        return ;
-    }
-
-	jpeg_decoder_handle_t jpgd_handle;
-	jpeg_decode_engine_cfg_t decode_eng_cfg = {
-		.intr_priority = 0,
-		.timeout_ms = 40,
-	};
-	jpeg_new_decoder_engine(&decode_eng_cfg, &jpgd_handle);
-
-    ppa_client_handle_t ppa_srm_handle = NULL;
-    ppa_client_config_t ppa_srm_config = {
-        .oper_type = PPA_OPERATION_SRM,
-        .max_pending_trans_num = 1,
-    };
-    ESP_ERROR_CHECK(ppa_register_client(&ppa_srm_config, &ppa_srm_handle));
-
-
-	display_jpeg(jpgd_handle, ppa_srm_handle, mipi_dpi_panel,
-					//	jpeg_buf, jpeg_size,
-						(uint8_t*)image_jpg_start, image_jpg_end-image_jpg_start,
-						raw_buf, raw_size,
-						ppa_buf, ppa_size);
-
+	lgfx_init(RAW_BUF_W, RAW_BUF_H);
+	lgfx_drawString("Hello from LovyanGFX Sprite!", 10, 20);
+	display_jpeg(image_jpg_start, image_jpg_end-image_jpg_start);
 
 	vTaskDelay(10000 / portTICK_PERIOD_MS);
 
-    free(ppa_buf);
-	free(raw_buf);
-
-    ESP_ERROR_CHECK(ppa_unregister_client(ppa_srm_handle));
-	jpeg_del_decoder_engine(jpgd_handle);
-    esp_dsi_resource_destroy(mipi_dsi_bus, mipi_dbi_io, mipi_dpi_panel);
+	dsi_close();
 }
 #endif

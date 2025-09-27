@@ -129,4 +129,148 @@ enum {
 	DPC_USB_POWER_SUPPLY		= 0xD150,
 };
 
+// FNumber
+// type: CrDataType_UInt16
+// value = F number * 100
+enum
+{
+	CrFnumber_IrisClose = 0xFFFD, // Iris Close
+	CrFnumber_Unknown   = 0xFFFE, // Display "--"
+	CrFnumber_Nothing   = 0xFFFF, // Nothing to display
+};
+
+// ExposureBiasCompensation
+// type: CrDataType_UInt16
+// value: compensation value * 1000
+
+// ShutterSpeed
+// type: CrDataType_UInt32
+// value: upper two bytes = numerator, lower two bytes = denominator.
+enum
+{
+	CrShutterSpeed_Bulb = 0x00000000,
+	CrShutterSpeed_Nothing = 0xFFFFFFFF, // Nothing to display
+};
+
+// IsoSensitivity
+// type: CrDataType_UInt32
+// value: bit 28-31 extension, bit 24-27 ISO mode, bit 0-23 ISO value
+enum
+{
+	CrISO_Normal = 0x00,	// ISO setting Normal
+	CrISO_MultiFrameNR = 0x01,	// Multi Frame NR
+	CrISO_MultiFrameNR_High = 0x02,	// Multi Frame NR High
+	CrISO_Ext = 0x10,	// Indicates of extended value
+	CrISO_AUTO = 0xFFFFFF,
+};
+
+struct __attribute__((packed)) focalFrame {
+	uint16_t type;
+	uint16_t state;
+	uint8_t priority;
+	uint8_t reserved[3];
+	uint32_t x_numerator;	// 1024x value
+	uint32_t y_numerator;
+	uint32_t height;
+	uint32_t width;
+};
+
+struct __attribute__((packed)) focalFrames {
+	uint32_t x_denominator;	// 1024x value
+	uint32_t y_denominator;
+	uint16_t frameNum;
+	uint8_t reserved[6];
+	struct focalFrame frames[0];
+};
+
+/*
+type FocalFrameInfo {
+	+0		Version(2)		// Data version (100x value)
+	+2		reserved(6)
+	+8		reserved(8+24)
+	+40		reserved Frame(16+24*0)
+
+	+56		FocusFrame:
+			FaceFrames:		// Version 1.01 or later
+			TrackingFrames:	// Version 1.01 or later
+			FramingFrames:	// Version 1.03 or later
+};
+*/
+
+enum FocusFrameType
+{
+  PhaseDetection_AFSensor     = 0x0001,
+  PhaseDetection_ImageSensor  = 0x0002,
+  Wide                        = 0x0003,
+  Zone                        = 0x0004,
+  CentralEmphasis             = 0x0005,
+  ContrastFlexibleMain        = 0x0006,
+  ContrastFlexibleAssist      = 0x0007,
+  Contrast                    = 0x0008,
+  ContrastUpperHalf           = 0x0009,
+  ContrastLowerHalf           = 0x000A,
+  DualAFMain                  = 0x000B,
+  DualAFAssist                = 0x000C,
+  NonDualAFMain               = 0x000D,
+  NonDualAFAssist             = 0x000E,
+  FrameSomewhere              = 0x000F,
+  Cross                       = 0x0010,
+};
+enum FocusFrameState
+{
+  NotFocused          = 0x0001,
+  Focused             = 0x0002,
+  FocusFrameSelection = 0x0003,
+  Moving              = 0x0004,
+  RangeLimit          = 0x0005,
+  RegistrationAF      = 0x0006,
+  Island              = 0x0007,
+};
+enum FaceFrameType
+{
+  DetectedFace              = 0x0001,
+  AF_TargetFace             = 0x0002,
+  PersonalRecognitionFace   = 0x0003,
+  SmileDetectionFace        = 0x0004,
+  SelectedFace              = 0x0005,
+  AF_TargetSelectionFace    = 0x0006,
+  SmileDetectionSelectFace  = 0x0007,
+};
+/*
+enum FaceFrameState
+{
+  NotFocused  = 0x0001,
+  Focused     = 0x0002,
+};
+*/
+enum SelectionState
+{
+  Unselected  = 0x01,
+  Selected    = 0x02,
+};
+enum TrackingFrameType
+{
+  NonTargetAF  = 0x0001,
+  TargetAF     = 0x0002,
+};
+/*
+enum TrackingFrameState
+{
+  NotFocused  = 0x0001,
+  Focused     = 0x0002,
+};
+*/
+enum FramingFrameType
+{
+  Auto                = 0x0001,
+  None                = 0x0002,
+  Single              = 0x0003,
+  reserved4           = 0x0004,
+  PTZ                 = 0x0005,
+  reserved6           = 0x0006,
+  reserved7           = 0x0007,
+  HoldCurrentPosition = 0x0008,
+  ForceZoomOut        = 0x0009,
+};
+
 #endif // PTPTDEF
