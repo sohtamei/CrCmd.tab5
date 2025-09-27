@@ -90,7 +90,7 @@ usb_transfer_t *event_in = NULL;
 
 static int updateDeviceProp(int onlyDiff);
 
-static char g_linebuf[128] = {0};
+static char g_linebuf[64] = {0};
 struct rect g_rects[64];
 
 #define JpegBuf_SIZE	0x40000
@@ -409,81 +409,6 @@ static int usb_ptp_transfer(uint32_t pcode,
 
 //-------------------- client ------------------
 
-/*
-double Round(double value, int figure)
-{
-    bool isNegative = ( value < 0 );
-    if (isNegative == true) value = -value;
-    double rate = pow(10.0, figure);
-    long tmp = (long)(value * rate + 0.5);
-    value = tmp/rate;
-    if (isNegative == true) value = -value;
-    return value;
-}
-*/
-void format_f_number(char* linebuf, uint32_t f_number)
-{
-    if ((0x0000 == f_number) || (CrFnumber_Unknown == f_number)) {
-        sprintf(linebuf, "--");
-    } else if(CrFnumber_Nothing == f_number) {
-
-    } else {
-        auto modValue = static_cast<uint16_t>(f_number % 100);
-        if (modValue > 0) {
-          //sprintf(linebuf, "F%.1f", Round((f_number / 100.0), 1));
-            sprintf(linebuf, "F%.1f", f_number / 100.0);
-        }
-        else {
-            sprintf(linebuf, "F%ld", f_number / 100);
-        }
-    }
-}
-
-void format_iso_sensitivity(char* linebuf, uint32_t iso)
-{
-//	uint32_t iso_ext = (iso >> 24) & 0x000000F0;  // bit 28-31
-//	uint32_t iso_mode = (iso >> 24) & 0x0000000F; // bit 24-27
-	uint32_t iso_value = (iso & 0x00FFFFFF);	  // bit  0-23
-/*
-	if (iso_mode == CrISO_MultiFrameNR) {
-		ss << "MultiFrameNR_";
-	}
-	else if (iso_mode == CrISO_MultiFrameNR_High) {
-		ss << "MultiFrameNR_High_";
-	}
-*/
-	if (iso_value == CrISO_AUTO) {
-		sprintf(linebuf, "ISO-AUTO");
-	}
-	else {
-		sprintf(linebuf, "ISO-%ld", iso_value);
-	}
-
-	//if (iso_ext == CrISO_Ext) {
-	//	ss << " (EXT)";
-	//}
-}
-
-void format_shutter_speed(char* linebuf, uint32_t shutter_speed)
-{
-    uint16_t numerator   = static_cast<uint16_t>((shutter_speed >> 16) & 0xFFFF);
-    uint16_t denominator = static_cast<uint16_t>(shutter_speed & 0xFFFF);
-
-    if (0 == shutter_speed) {
-        sprintf(linebuf, "Bulb");
-    } else if (0 == denominator) {
-        sprintf(linebuf, "error");
-    } else if (1 == numerator) {
-        sprintf(linebuf, "%d/%d", numerator, denominator);
-    } else if (0 == numerator % denominator) {
-        sprintf(linebuf, "%d\"", numerator / denominator);
-    } else {
-        int32_t numdivision = numerator / denominator;
-        int32_t numremainder = numerator % denominator;
-        sprintf(linebuf, "%ld.%ld", numdivision, numremainder);
-    }
-}
-
 int incParam(int index, int diff)
 {
 	if(paramTable[index].isenabled != 1) return -1;
@@ -497,7 +422,8 @@ int incParam(int index, int diff)
 
 	if(paramTable[index].currentIndex == currentIndex) return 0;
 
-	paramTable[index].currentIndex = currentIndex;
+	if(index != 4)
+		paramTable[index].currentIndex = currentIndex;
 
 	int32_t data = paramTable[index].enums[currentIndex];
 	int size = 0;
@@ -571,6 +497,7 @@ static int updateDeviceProp(int onlyDiff)
 	int propNum = GetL32(jpegBuf+0);
 	(void)propNum;
 	uint8_t* dp = jpegBuf+8;
+	int ledUpdated = 0;
 	for(; dp < jpegBuf+recv_size;) {
 		uint16_t pcode    = GetL16(dp); dp+=2;
 		uint16_t datatype = GetL16(dp); dp+=2;
@@ -643,9 +570,14 @@ static int updateDeviceProp(int onlyDiff)
 			int led = (paramTable[index].isenabled==1 ? 0x101010: 0x000000);
 			if(paramTable[index].led != led) {
 				paramTable[index].led = led;
-				_8encoder_write(_8ENCODER_REG_RGB, index, led);
+				ledUpdated = 1;
 			}
 		}
+	}
+	if(ledUpdated) {
+		uint32_t buf[PARAM_NUM];
+		for(int i = 0; i < PARAM_NUM; i++) buf[i] = paramTable[i].led;
+		_8encoder_write(_8ENCODER_REG_RGB, buf, PARAM_NUM);
 	}
 
 	memset(g_linebuf, ' ', sizeof(g_linebuf)-1);
@@ -658,6 +590,7 @@ static int updateDeviceProp(int onlyDiff)
 	else
 		sprintf(g_linebuf+12, "%.1f", paramTable[2].current/1000.0);
 	format_iso_sensitivity(g_linebuf+17, paramTable[3].current);
+	format_exposure_program_mode(g_linebuf+27, paramTable[4].current);
 
 	for(int i = 0; i < sizeof(g_linebuf)-1; i++)
 		if(g_linebuf[i] == 0) g_linebuf[i] = ' ';
@@ -705,6 +638,9 @@ void parseLvProp(const uint8_t* buf, int bufSize, struct rect* rect, int rectSiz
 	for(int i = 0; i < framesNum; i++) {
 		struct focalFrames* frames = (struct focalFrames*)dp;
 
+		if(frames->x_denominator == 0 || frames->y_denominator == 0) {
+			return;
+		}
 		if(frames->x_denominator != (640*1024) || frames->y_denominator != (480*1024)) {
 			ESP_LOGE(TAG, "(%d)illegal prop", __LINE__);
 			return;
@@ -802,23 +738,37 @@ extern "C" void app_main(void)
 
 	updateDeviceProp(false);
 
-	int32_t cnt_last[PARAM_NUM] = {0};
-	int32_t cnt_cur[PARAM_NUM] = {0};
+	uint32_t cnt_last[PARAM_NUM] = {0};
+	uint32_t cnt_cur[PARAM_NUM] = {0};
 
 	(void)ret;
 	ret = _8encoder_read(_8ENCODER_REG_COUNTER, cnt_last, PARAM_NUM);
-//	if(!ret) printf("%3ld,%3ld,%3ld,%3ld,\n", cnt_last[0],cnt_last[1],cnt_last[2],cnt_last[3]);//,cnt_last[4],cnt_last[5],cnt_last[6],cnt_last[7]);
+//	if(!ret) printf("%3ld,%3ld,%3ld,%3ld,\n", cnt_last[0],cnt_last[1],cnt_last[2],cnt_last[3],cnt_last[4]);//
 
+	uint8_t positionKey = 0;
+	uint32_t button_last = 1;
 
 	uint64_t base_time = 0;
 	uint32_t time1;
 	uint32_t time2;
 	uint32_t time3;
+	(void)time1;
+	(void)time2;
+	(void)time3;
+
+	uint64_t last_time = esp_timer_get_time();
+	int last_count = 0;
+	int frame_count = 0;
 	while(1) {
 		base_time = esp_timer_get_time();
 
 		ret = _8encoder_read(_8ENCODER_REG_COUNTER, cnt_cur, PARAM_NUM);
-	//	if(!ret) printf("%3ld,%3ld,%3ld,%3ld,\n", cnt_cur[0],cnt_cur[1],cnt_cur[2],cnt_cur[3]);//,cnt_cur[4],cnt_cur[5],cnt_cur[6],cnt_cur[7]);
+	//	if(!ret) printf("%3ld,%3ld,%3ld,%3ld,\n", cnt_cur[0],cnt_cur[1],cnt_cur[2],cnt_cur[3],cnt_cur[4]);//
+
+		uint32_t button_cur = 1;
+		ret = _8encoder_read(_8ENCODER_REG_BUTTON+4, &button_cur, 1);
+		uint32_t osd = 1;
+		ret = _8encoder_read(_8ENCODER_REG_SWITCH, &osd, 1);
 
 		time1 = esp_timer_get_time() - base_time;
 		if(g_driver_obj.ptpEvent & EVENT_DP_Changed) {
@@ -835,6 +785,11 @@ extern "C" void app_main(void)
 				cnt_last[i] = cnt_cur[i] & ~1;
 			}
 		}
+		if(button_last == 1 && button_cur == 0) {
+			positionKey = (positionKey?0:1);	// Camera/PC Remote
+			usb_ptp_transfer(PTP_OC_SDIOSetExtDevicePropValue, 2, DPC_POSITION_KEY,1,0,0,0, &positionKey,1, NULL,0,NULL);
+		}
+		button_last = button_cur;
 
 		uint32_t lv_buf_size = 0;
 		ret = usb_ptp_transfer(PTP_OC_GetObject,
@@ -862,15 +817,24 @@ extern "C" void app_main(void)
 		int prop_offset = GetL32(jpegBuf+8);
 		int prop_size   = GetL32(jpegBuf+12);
 
-//	for(int i = 0; i < prop_size; i++) {printf("%02x", jpegBuf[prop_offset+i]);} printf("\n");
+	//	for(int i = 0; i < prop_size; i++) {printf("%02x", jpegBuf[prop_offset+i]);} printf("\n");
 		int rectCount = 0;
-		parseLvProp(jpegBuf+prop_offset, prop_size, g_rects, numof(g_rects), &rectCount);
+		if(prop_size)
+			parseLvProp(jpegBuf+prop_offset, prop_size, g_rects, numof(g_rects), &rectCount);
 
-		display_jpeg(jpegBuf+lv_offset, lv_size, g_linebuf, g_rects, rectCount);
+		if(lv_size)
+			display_jpeg(jpegBuf+lv_offset, lv_size, g_linebuf, g_rects, rectCount, osd);
 
 		time3 = esp_timer_get_time() - base_time;
-		printf("%6ld,%6ld,%ld\n", time1, time2-time1, time3-time2);
+	//	printf("%6ld,%6ld,%ld\n", time1, time2-time1, time3-time2);
 
+		frame_count++;
+		uint64_t cur_time = esp_timer_get_time();
+		if(cur_time > last_time + 3*1000*1000) {
+			printf("%.1f\n", (frame_count - last_count)/((cur_time - last_time)/(1000.0*1000.0)));
+			last_time = cur_time;
+			last_count = frame_count;
+		}
 	//	vTaskDelay(1);
 	}
 

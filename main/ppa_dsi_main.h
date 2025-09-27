@@ -40,7 +40,7 @@ esp_err_t _init_port(void);
 esp_err_t dsi_init(void);
 void dsi_close(void);
 
-esp_err_t display_jpeg(const uint8_t* jpeg_buf, uint32_t jpeg_size, const char* linebuf, const struct rect* rects, int rectCount);
+esp_err_t display_jpeg(const uint8_t* jpeg_buf, uint32_t jpeg_size, const char* linebuf, const struct rect* rects, int rectCount, int osd);
 
 
 #ifdef __cplusplus

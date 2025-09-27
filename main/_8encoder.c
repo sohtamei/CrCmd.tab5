@@ -35,7 +35,7 @@ int _8encoder_delete(void)
 	return 0;
 }
 
-int _8encoder_read(int reg, int32_t* data, int num)
+int _8encoder_read(int reg, uint32_t* data, int num)
 {
 	int regSize = 1;
 	if((reg&0xE0) == _8ENCODER_REG_COUNTER || (reg&0xE0) == _8ENCODER_REG_INCREMENT)
@@ -61,28 +61,25 @@ int _8encoder_read(int reg, int32_t* data, int num)
 		}
 
 		data[i] = 0;
-		for(int j = 0; j < regSize; j++) {
-			data[i] |= recvBuf[j]<<(j*8);
-		}
+		memcpy(&data[i], recvBuf, regSize);
 	}
 	return 0;
 }
 
-int _8encoder_write(int reg, int index, uint32_t data)
+int _8encoder_write(int reg, uint32_t* data, int num)
 {
 	int regSize = 1;
 	if((reg&0xF0) == _8ENCODER_REG_RGB || (reg&0xF0) == _8ENCODER_REG_RGB+0x10)
 		regSize = 3;
 
 	int ret;
-	uint8_t sendBuf[1+4];
-	sendBuf[0] = reg+index*regSize;
+	uint8_t sendBuf[33];
+	sendBuf[0] = reg;
 
-	for(int j = 0; j < regSize; j++) {
-		sendBuf[1+j] = (data>>(j*8))&0xFF;
-	}
+	for(int i = 0; i < num; i++)
+		memcpy(sendBuf+1 + i*regSize, &data[i], regSize);
 
-	ret = i2c_master_write_to_device(I2C_PORT, _8ENCODER_ADDR, sendBuf, 1+regSize, I2C_TIMEOUT_MS / portTICK_PERIOD_MS);
+	ret = i2c_master_write_to_device(I2C_PORT, _8ENCODER_ADDR, sendBuf, 1+num*regSize, I2C_TIMEOUT_MS / portTICK_PERIOD_MS);
 	if(ret) {
 		ESP_LOGE(TAG, "Error(%d,%x)", __LINE__, ret); 
 		return ret;

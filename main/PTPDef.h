@@ -1,6 +1,14 @@
 #ifndef PTPTDEF
 #define PTPTDEF
 
+#include <stdint.h>
+
+void format_f_number(char* linebuf, uint32_t f_number);
+void format_iso_sensitivity(char* linebuf, uint32_t iso);
+void format_shutter_speed(char* linebuf, uint32_t shutter_speed);
+void format_exposure_program_mode(char* linebuf, uint32_t exposure_program_mode);
+
+
 #define PTP_DT_UNDEF 0x0000
 #define PTP_DT_INT8 0x0001
 #define PTP_DT_UINT8 0x0002

@@ -280,7 +280,7 @@ void dsi_close(void)
 //-------------------------------------------------------------------------------------
 
 static int last_rectCount = 0;
-esp_err_t display_jpeg(const uint8_t* jpeg_buf, uint32_t jpeg_size, const char* linebuf, const struct rect* rects, int rectCount)
+esp_err_t display_jpeg(const uint8_t* jpeg_buf, uint32_t jpeg_size, const char* linebuf, const struct rect* rects, int rectCount, int osd)
 {
 	struct param {
 		int  out_size;
@@ -300,8 +300,9 @@ esp_err_t display_jpeg(const uint8_t* jpeg_buf, uint32_t jpeg_size, const char* 
 		{1024*768*2, 1024,768,  960, 160, 720.0/768},		// 4:3
 		{1024*1024*2,1024,1024, 720, 280, 720.0/1024},		// 1:1
 	};
-//	uint64_t base_time = 0;
-//	base_time = esp_timer_get_time();
+	uint64_t base_time = 0;
+	(void)base_time;
+	base_time = esp_timer_get_time();
 
 	jpeg_decode_cfg_t jpeg_decode_cfg = {
 		.output_format = JPEG_DECODE_OUT_FORMAT_RGB565,
@@ -323,75 +324,77 @@ esp_err_t display_jpeg(const uint8_t* jpeg_buf, uint32_t jpeg_size, const char* 
 
 	//---------------BLEND------------------//
 #if 1
-	if(rectCount || last_rectCount) {
-	//	lgfx_fillScreen(LGFX_TFT_BLACK);
-		lgfx_fillRect(0,0, RAW_BUF_W,param->raw_height, LGFX_TFT_BLACK);
-		for(int j = 0; j < rectCount; j++) {
-			lgfx_drawRect(
-				rects[j].x*param->raw_width /640/1024,	// 640->width
-				rects[j].y*param->raw_height/480/1024,	// 480->height
-				rects[j].w*param->raw_width /640/1024,
-				rects[j].h*param->raw_height/480/1024,
-				rects[j].color);
+	if(osd) {
+		if(rectCount || last_rectCount) {
+		//	lgfx_fillScreen(LGFX_TFT_BLACK);
+			lgfx_fillRect(0,0, RAW_BUF_W,param->raw_height, LGFX_TFT_BLACK);
+			for(int j = 0; j < rectCount; j++) {
+				lgfx_drawRect(
+					rects[j].x*param->raw_width /640/1024,	// 640->width
+					rects[j].y*param->raw_height/480/1024,	// 480->height
+					rects[j].w*param->raw_width /640/1024,
+					rects[j].h*param->raw_height/480/1024,
+					rects[j].color);
+			}
 		}
+		last_rectCount = rectCount;
+
+		lgfx_drawString(linebuf, 10, param->raw_height - 10);
+
+		//this operation will blend the bg_buf with the fg_buf
+		ppa_blend_oper_config_t blend_config = {
+			.in_bg.buffer = raw_buf,
+			.in_bg.pic_w = param->raw_width,
+			.in_bg.pic_h = param->raw_height,
+			.in_bg.block_w = param->raw_width,
+			.in_bg.block_h = param->raw_height,
+			.in_bg.block_offset_x = 0,
+			.in_bg.block_offset_y = 0,
+			.in_bg.blend_cm = PPA_BLEND_COLOR_MODE_RGB565,
+			.in_fg.buffer = lgfx_getBuffer(),
+			.in_fg.pic_w = param->raw_width,
+			.in_fg.pic_h = param->raw_height,
+			.in_fg.block_w = param->raw_width,
+			.in_fg.block_h = param->raw_height,
+			.in_fg.block_offset_x = 0,
+			.in_fg.block_offset_y = 0,
+			.in_fg.blend_cm = PPA_BLEND_COLOR_MODE_RGB565,
+			.out.buffer = raw_buf,
+			.out.buffer_size = raw_size,
+			.out.pic_w = param->raw_width,
+			.out.pic_h = param->raw_height,
+			.out.block_offset_x = 0,
+			.out.block_offset_y = 0,
+			.out.blend_cm = PPA_BLEND_COLOR_MODE_RGB565,
+			.bg_rgb_swap = 0,
+			.bg_byte_swap = 1,
+			.bg_alpha_update_mode = PPA_ALPHA_NO_CHANGE,
+
+		//	.bg_alpha_update_mode = PPA_ALPHA_SCALE,
+		//	.bg_alpha_scale_ratio = 0.9,
+
+		//	.bg_alpha_update_mode = PPA_ALPHA_FIX_VALUE,  // 215: invalid fg_alpha_fix_val
+		//	.bg_alpha_fix_val = 0,		// union
+			.bg_ck_en = false,
+
+			.fg_rgb_swap = 0,
+			.fg_byte_swap = 1,
+			.fg_alpha_update_mode = PPA_ALPHA_NO_CHANGE,
+
+		//	.fg_alpha_update_mode = PPA_ALPHA_SCALE,
+		//	.fg_alpha_scale_ratio = 0.5,
+
+		//	.fg_alpha_update_mode = PPA_ALPHA_FIX_VALUE,  // 215: invalid fg_alpha_fix_val
+		//	.fg_alpha_fix_val = 128,	// 0~255, union
+
+			.fg_fix_rgb_val = { .b = 0xd3, .g = 0x03, .r = 0xff, },
+			.fg_ck_en = true,
+			.fg_ck_rgb_low_thres = { .b = 0x00, .g = 0x00, .r = 0x00, },
+			.fg_ck_rgb_high_thres = { .b = 0x01, .g = 0x01, .r = 0x01, },
+			.mode = PPA_TRANS_MODE_BLOCKING,
+		};
+		ESP_ERROR_CHECK(ppa_do_blend(ppa_blend_handle, &blend_config));
 	}
-	last_rectCount = rectCount;
-
-	lgfx_drawString(linebuf, 10, param->raw_height - 10);
-
-	//this operation will blend the bg_buf with the fg_buf
-	ppa_blend_oper_config_t blend_config = {
-		.in_bg.buffer = raw_buf,
-		.in_bg.pic_w = param->raw_width,
-		.in_bg.pic_h = param->raw_height,
-		.in_bg.block_w = param->raw_width,
-		.in_bg.block_h = param->raw_height,
-		.in_bg.block_offset_x = 0,
-		.in_bg.block_offset_y = 0,
-		.in_bg.blend_cm = PPA_BLEND_COLOR_MODE_RGB565,
-		.in_fg.buffer = lgfx_getBuffer(),
-		.in_fg.pic_w = param->raw_width,
-		.in_fg.pic_h = param->raw_height,
-		.in_fg.block_w = param->raw_width,
-		.in_fg.block_h = param->raw_height,
-		.in_fg.block_offset_x = 0,
-		.in_fg.block_offset_y = 0,
-		.in_fg.blend_cm = PPA_BLEND_COLOR_MODE_RGB565,
-		.out.buffer = raw_buf,
-		.out.buffer_size = raw_size,
-		.out.pic_w = param->raw_width,
-		.out.pic_h = param->raw_height,
-		.out.block_offset_x = 0,
-		.out.block_offset_y = 0,
-		.out.blend_cm = PPA_BLEND_COLOR_MODE_RGB565,
-		.bg_rgb_swap = 0,
-		.bg_byte_swap = 1,
-		.bg_alpha_update_mode = PPA_ALPHA_NO_CHANGE,
-
-	//	.bg_alpha_update_mode = PPA_ALPHA_SCALE,
-	//	.bg_alpha_scale_ratio = 0.9,
-
-	//	.bg_alpha_update_mode = PPA_ALPHA_FIX_VALUE,  // 215: invalid fg_alpha_fix_val
-	//	.bg_alpha_fix_val = 0,		// union
-		.bg_ck_en = false,
-
-		.fg_rgb_swap = 0,
-		.fg_byte_swap = 1,
-		.fg_alpha_update_mode = PPA_ALPHA_NO_CHANGE,
-
-	//	.fg_alpha_update_mode = PPA_ALPHA_SCALE,
-	//	.fg_alpha_scale_ratio = 0.5,
-
-	//	.fg_alpha_update_mode = PPA_ALPHA_FIX_VALUE,  // 215: invalid fg_alpha_fix_val
-	//	.fg_alpha_fix_val = 128,	// 0~255, union
-
-		.fg_fix_rgb_val = { .b = 0xd3, .g = 0x03, .r = 0xff, },
-		.fg_ck_en = true,
-		.fg_ck_rgb_low_thres = { .b = 0x00, .g = 0x00, .r = 0x00, },
-		.fg_ck_rgb_high_thres = { .b = 0x01, .g = 0x01, .r = 0x01, },
-		.mode = PPA_TRANS_MODE_BLOCKING,
-	};
-	ESP_ERROR_CHECK(ppa_do_blend(ppa_blend_handle, &blend_config));
 #endif
 //	ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(mipi_dpi_panel, 0, 0, param->raw_width, param->raw_height, raw_buf));
 
@@ -415,7 +418,7 @@ esp_err_t display_jpeg(const uint8_t* jpeg_buf, uint32_t jpeg_size, const char* 
 		.scale_x = param->scale,
 		.scale_y = param->scale,
 		.rgb_swap = 0,
-		.byte_swap = 0,
+		.byte_swap = (osd?0:1),
 		.mode = PPA_TRANS_MODE_BLOCKING,
 	};
 	ESP_ERROR_CHECK(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
