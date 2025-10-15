@@ -300,10 +300,15 @@ esp_err_t display_jpeg(const uint8_t* jpeg_buf, uint32_t jpeg_size, const char* 
 		{1024*768*2, 1024,768,  960, 160, 720.0/768},		// 4:3
 		{1024*1024*2,1024,1024, 720, 280, 720.0/1024},		// 1:1
 	};
-	uint64_t base_time = 0;
-	(void)base_time;
+	uint64_t base_time = 0; (void)base_time;
+	uint32_t time1; (void)time1;
+	uint32_t time2; (void)time2;
+	uint32_t time3; (void)time3;
+	uint32_t time4; (void)time4;
+	uint32_t time5; (void)time5;
 	base_time = esp_timer_get_time();
 
+	//### jpeg dec ###
 	jpeg_decode_cfg_t jpeg_decode_cfg = {
 		.output_format = JPEG_DECODE_OUT_FORMAT_RGB565,
 		.rgb_order = JPEG_DEC_RGB_ELEMENT_ORDER_RGB,
@@ -321,9 +326,10 @@ esp_err_t display_jpeg(const uint8_t* jpeg_buf, uint32_t jpeg_size, const char* 
 	}
 	if(i >= numof(paramTable)) return -1;
 	const struct param* param = &paramTable[i];
+	time1 = esp_timer_get_time() - base_time;
+	time2 = time1;
 
-	//---------------BLEND------------------//
-#if 1
+	//### blend ###
 	if(osd) {
 		if(rectCount || last_rectCount) {
 		//	lgfx_fillScreen(LGFX_TFT_BLACK);
@@ -340,6 +346,7 @@ esp_err_t display_jpeg(const uint8_t* jpeg_buf, uint32_t jpeg_size, const char* 
 		last_rectCount = rectCount;
 
 		lgfx_drawString(linebuf, 10, param->raw_height - 10);
+		time2 = esp_timer_get_time() - base_time;
 
 		//this operation will blend the bg_buf with the fg_buf
 		ppa_blend_oper_config_t blend_config = {
@@ -395,9 +402,9 @@ esp_err_t display_jpeg(const uint8_t* jpeg_buf, uint32_t jpeg_size, const char* 
 		};
 		ESP_ERROR_CHECK(ppa_do_blend(ppa_blend_handle, &blend_config));
 	}
-#endif
-//	ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(mipi_dpi_panel, 0, 0, param->raw_width, param->raw_height, raw_buf));
+	time3 = esp_timer_get_time() - base_time;
 
+	//### scale&rotate ###
 	ppa_srm_oper_config_t srm_config = {
 		.in.buffer = (uint16_t*)raw_buf,
 		.in.pic_w = param->raw_width,
@@ -422,13 +429,16 @@ esp_err_t display_jpeg(const uint8_t* jpeg_buf, uint32_t jpeg_size, const char* 
 		.mode = PPA_TRANS_MODE_BLOCKING,
 	};
 	ESP_ERROR_CHECK(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
+	time4 = esp_timer_get_time() - base_time;
 
+	//### draw ###
 	ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(mipi_dpi_panel,
 											0, param->x_offset,
 											srm_config.out.pic_w, param->x_offset + srm_config.out.pic_h,
 											ppa_buf));
 
-//	printf("%6ld\n", (uint32_t)(esp_timer_get_time() - base_time));
+	time5 = esp_timer_get_time() - base_time;
+	printf("%6ld,%6ld,%6ld,%6ld,%6ld\n", time1, time2-time1, time3-time2, time4-time3, time5-time4);
 	return 0;
 }
 
@@ -442,7 +452,7 @@ void app_main(void)
 
 	lgfx_init(RAW_BUF_W, RAW_BUF_H);
 	lgfx_drawString("Hello from LovyanGFX Sprite!", 10, 20);
-	display_jpeg(image_jpg_start, image_jpg_end-image_jpg_start);
+	display_jpeg(image_jpg_start, image_jpg_end-image_jpg_start, NULL, NULL, 0, 0);
 
 	vTaskDelay(10000 / portTICK_PERIOD_MS);
 
