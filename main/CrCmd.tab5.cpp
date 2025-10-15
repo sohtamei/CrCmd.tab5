@@ -173,6 +173,7 @@ int usb_host_init(void)
 		.root_port_unpowered = false,
 		.intr_flags = ESP_INTR_FLAG_LEVEL1,
 		.enum_filter_cb = NULL,
+		.fifo_settings_custom = {0,0,0},
 	};
 	ESP_ERROR_CHECK(usb_host_install(&host_config));
 
@@ -749,19 +750,19 @@ extern "C" void app_main(void)
 	uint32_t button_last = 1;
 
 	uint64_t base_time = 0;
-	uint32_t time1;
-	uint32_t time2;
-	uint32_t time3;
-	(void)time1;
-	(void)time2;
-	(void)time3;
+	uint32_t time1; (void)time1;
+	uint32_t time2; (void)time2;
+	uint32_t time3; (void)time3;
+	uint32_t time4; (void)time4;
 
-	uint64_t last_time = esp_timer_get_time();
-	int last_count = 0;
-	int frame_count = 0;
+	uint64_t last_time = esp_timer_get_time(); (void)last_time;
+	int last_count  = 0; (void)last_count;
+	int frame_count = 0; (void)frame_count;
+
 	while(1) {
 		base_time = esp_timer_get_time();
 
+		// 8encoder
 		ret = _8encoder_read(_8ENCODER_REG_COUNTER, cnt_cur, PARAM_NUM);
 	//	if(!ret) printf("%3ld,%3ld,%3ld,%3ld,\n", cnt_cur[0],cnt_cur[1],cnt_cur[2],cnt_cur[3],cnt_cur[4]);//
 
@@ -771,6 +772,8 @@ extern "C" void app_main(void)
 		ret = _8encoder_read(_8ENCODER_REG_SWITCH, &osd, 1);
 
 		time1 = esp_timer_get_time() - base_time;
+
+		//### update DP ###
 		if(g_driver_obj.ptpEvent & EVENT_DP_Changed) {
 			g_driver_obj.ptpEvent &= ~EVENT_DP_Changed;
 			updateDeviceProp(true);
@@ -790,7 +793,9 @@ extern "C" void app_main(void)
 			usb_ptp_transfer(PTP_OC_SDIOSetExtDevicePropValue, 2, DPC_POSITION_KEY,1,0,0,0, &positionKey,1, NULL,0,NULL);
 		}
 		button_last = button_cur;
+		time2 = esp_timer_get_time() - base_time;
 
+		//### get LV ###
 		uint32_t lv_buf_size = 0;
 		ret = usb_ptp_transfer(PTP_OC_GetObject,
 								1, 0xFFFFC002,0,0,0,0,
@@ -798,7 +803,6 @@ extern "C" void app_main(void)
 								jpegBuf,JpegBuf_SIZE,&lv_buf_size);		// liveview
 		if(ret) continue;
 
-		time2 = esp_timer_get_time() - base_time;
 		/*
 		# header  0
 		F4 03 00 00 		LiveView Image Offset
@@ -821,13 +825,15 @@ extern "C" void app_main(void)
 		int rectCount = 0;
 		if(prop_size)
 			parseLvProp(jpegBuf+prop_offset, prop_size, g_rects, numof(g_rects), &rectCount);
+		time3 = esp_timer_get_time() - base_time;
 
+		//### render LV ###
 		if(lv_size)
 			display_jpeg(jpegBuf+lv_offset, lv_size, g_linebuf, g_rects, rectCount, osd);
-
-		time3 = esp_timer_get_time() - base_time;
-	//	printf("%6ld,%6ld,%ld\n", time1, time2-time1, time3-time2);
-
+#if 1
+		time4 = esp_timer_get_time() - base_time;
+	//	printf("%6ld,%6ld,%6ld,%6ld\n", time1, time2-time1, time3-time2, time4-time3);
+#else
 		frame_count++;
 		uint64_t cur_time = esp_timer_get_time();
 		if(cur_time > last_time + 3*1000*1000) {
@@ -835,6 +841,7 @@ extern "C" void app_main(void)
 			last_time = cur_time;
 			last_count = frame_count;
 		}
+#endif
 	//	vTaskDelay(1);
 	}
 
