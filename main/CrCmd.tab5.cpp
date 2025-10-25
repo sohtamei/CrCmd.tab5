@@ -828,13 +828,14 @@ extern "C" void app_main(void)
 		time3 = esp_timer_get_time() - base_time;
 
 		//### render LV ###
-		if(lv_size)
+		if(lv_size) {
+			frame_count++;
 			display_jpeg(jpegBuf+lv_offset, lv_size, g_linebuf, g_rects, rectCount, osd);
-#if 1
+		}
+#if 0
 		time4 = esp_timer_get_time() - base_time;
 	//	printf("%6ld,%6ld,%6ld,%6ld\n", time1, time2-time1, time3-time2, time4-time3);
 #else
-		frame_count++;
 		uint64_t cur_time = esp_timer_get_time();
 		if(cur_time > last_time + 3*1000*1000) {
 			printf("%.1f\n", (frame_count - last_count)/((cur_time - last_time)/(1000.0*1000.0)));

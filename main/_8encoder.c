@@ -6,8 +6,8 @@
 static const char *TAG = "I2C";
 
 #define _8ENCODER_ADDR		0x41
-#define PORT_SDA			53
-#define PORT_SCL			54
+#define PORT_SDA			7
+#define PORT_SCL			8
 
 #define I2C_TIMEOUT_MS		1000
 #define I2C_PORT			I2C_NUM_1
