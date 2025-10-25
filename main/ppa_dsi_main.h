@@ -24,8 +24,8 @@ extern "C" {
 
 #define RAW_BUF_W  1024
 #define RAW_BUF_H  1024
-#define PPA_BUF_W  1280
-#define PPA_BUF_H   720
+#define PPA_BUF_W  1024
+#define PPA_BUF_H   600
 
 struct rect {
 	uint32_t x;

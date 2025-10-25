@@ -578,7 +578,7 @@ static int updateDeviceProp(int onlyDiff)
 	if(ledUpdated) {
 		uint32_t buf[PARAM_NUM];
 		for(int i = 0; i < PARAM_NUM; i++) buf[i] = paramTable[i].led;
-		_8encoder_write(_8ENCODER_REG_RGB, buf, PARAM_NUM);
+	//	_8encoder_write(_8ENCODER_REG_RGB, buf, PARAM_NUM);
 	}
 
 	memset(g_linebuf, ' ', sizeof(g_linebuf)-1);
@@ -704,7 +704,7 @@ extern "C" void app_main(void)
 							0);
 	int i;
 
-	_8encoder_init();
+//	_8encoder_init();
 
 	while(g_driver_obj.dev_hdl == NULL)
 		vTaskDelay(100);
@@ -743,7 +743,7 @@ extern "C" void app_main(void)
 	uint32_t cnt_cur[PARAM_NUM] = {0};
 
 	(void)ret;
-	ret = _8encoder_read(_8ENCODER_REG_COUNTER, cnt_last, PARAM_NUM);
+//	ret = _8encoder_read(_8ENCODER_REG_COUNTER, cnt_last, PARAM_NUM);
 //	if(!ret) printf("%3ld,%3ld,%3ld,%3ld,\n", cnt_last[0],cnt_last[1],cnt_last[2],cnt_last[3],cnt_last[4]);//
 
 	uint8_t positionKey = 0;
@@ -763,13 +763,13 @@ extern "C" void app_main(void)
 		base_time = esp_timer_get_time();
 
 		// 8encoder
-		ret = _8encoder_read(_8ENCODER_REG_COUNTER, cnt_cur, PARAM_NUM);
+	//	ret = _8encoder_read(_8ENCODER_REG_COUNTER, cnt_cur, PARAM_NUM);
 	//	if(!ret) printf("%3ld,%3ld,%3ld,%3ld,\n", cnt_cur[0],cnt_cur[1],cnt_cur[2],cnt_cur[3],cnt_cur[4]);//
 
 		uint32_t button_cur = 1;
-		ret = _8encoder_read(_8ENCODER_REG_BUTTON+4, &button_cur, 1);
+	//	ret = _8encoder_read(_8ENCODER_REG_BUTTON+4, &button_cur, 1);
 		uint32_t osd = 1;
-		ret = _8encoder_read(_8ENCODER_REG_SWITCH, &osd, 1);
+	//	ret = _8encoder_read(_8ENCODER_REG_SWITCH, &osd, 1);
 
 		time1 = esp_timer_get_time() - base_time;
 
@@ -828,13 +828,14 @@ extern "C" void app_main(void)
 		time3 = esp_timer_get_time() - base_time;
 
 		//### render LV ###
-		if(lv_size)
+		if(lv_size) {
+			frame_count++;
 			display_jpeg(jpegBuf+lv_offset, lv_size, g_linebuf, g_rects, rectCount, osd);
-#if 1
+		}
+#if 0
 		time4 = esp_timer_get_time() - base_time;
 	//	printf("%6ld,%6ld,%6ld,%6ld\n", time1, time2-time1, time3-time2, time4-time3);
 #else
-		frame_count++;
 		uint64_t cur_time = esp_timer_get_time();
 		if(cur_time > last_time + 3*1000*1000) {
 			printf("%.1f\n", (frame_count - last_count)/((cur_time - last_time)/(1000.0*1000.0)));
