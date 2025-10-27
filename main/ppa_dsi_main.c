@@ -19,6 +19,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_ili9881c.h"
+#include "esp_lcd_touch_gt911.h"
 #include "esp_ldo_regulator.h"
 #include "sdkconfig.h"
 
@@ -40,6 +41,9 @@ static uint8_t* raw_buf = NULL;
 
 static size_t ppa_size = PPA_BUF_H * PPA_BUF_W * 2;
 static uint8_t* ppa_buf = NULL;
+
+#define TOUCH_RST			(-1)
+#define TOUCH_INT			(23)
 
 
 #define E1_ADDR			0x43  // ADDR=GND
@@ -93,6 +97,8 @@ esp_err_t i2c0_read_reg(uint8_t addr, uint8_t reg, uint8_t* val)
 esp_err_t _init_port(void)
 {
 //	esp_err_t ret;
+	gpio_set_direction(TOUCH_INT, GPIO_MODE_OUTPUT);
+	gpio_set_level(TOUCH_INT, 0);
 
 	const i2c_config_t i2c_conf = {
 		.mode = I2C_MODE_MASTER,
@@ -121,7 +127,7 @@ esp_err_t _init_port(void)
 	/*
 	E1.P7	i	HP_DETECT
 	E1.P6	H	CAM_RST
-	E1.P5	H	TP_RST
+	E1.P5	L/H	TP_RST
 	E1.P4	H	LCD_RST
 	E1.P3	x
 	E1.P2	H	EXT5V_EN
@@ -131,7 +137,11 @@ esp_err_t _init_port(void)
 														//      iHHHLHHL
 	ESP_ERROR_CHECK(i2c0_write_reg(E1_ADDR, PIO_REG_IO_DIR,   0b01111111));	// 0=input, 1=output
 	ESP_ERROR_CHECK(i2c0_write_reg(E1_ADDR, PIO_REG_OUT_HIZ,  0b00000000));	// Output Hi-z(0=enable, 1=Hi-Z)
+	ESP_ERROR_CHECK(i2c0_write_reg(E1_ADDR, PIO_REG_OUT_STATE,0b01000110));	// 0=Low, 1=High
+	vTaskDelay(10/portTICK_PERIOD_MS);
 	ESP_ERROR_CHECK(i2c0_write_reg(E1_ADDR, PIO_REG_OUT_STATE,0b01110110));	// 0=Low, 1=High
+	vTaskDelay(60/portTICK_PERIOD_MS);
+
 	/*
 	E2.P7	H	CHG_EN
 	E2.P6	i	CHG_STAT
@@ -149,6 +159,35 @@ esp_err_t _init_port(void)
 
 	gpio_set_direction(GPIO_LCD_BL, GPIO_MODE_OUTPUT);
 	gpio_set_level(GPIO_LCD_BL, 1);			// ON
+
+	return ESP_OK;
+}
+
+#define BSP_LCD_H_RES (720)
+#define BSP_LCD_V_RES (1280)
+
+esp_err_t app_touch_init(esp_lcd_touch_handle_t *tp)
+{
+	esp_lcd_panel_io_handle_t tp_io_handle = NULL;
+	esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
+	ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c((esp_lcd_i2c_bus_handle_t)I2C_NUM_0, &tp_io_config, &tp_io_handle));
+
+	const esp_lcd_touch_config_t tp_cfg = {
+		.x_max = BSP_LCD_H_RES,
+		.y_max = BSP_LCD_V_RES,
+		.rst_gpio_num = TOUCH_RST,
+		.int_gpio_num = TOUCH_INT,
+		.levels = {
+			.reset	 = 0,
+			.interrupt = 0,
+		},
+		.flags = {
+			.swap_xy  = 0,
+			.mirror_x = 0,
+			.mirror_y = 0,
+		},
+	};
+	ESP_ERROR_CHECK(esp_lcd_touch_new_i2c_gt911(tp_io_handle, &tp_cfg, tp));
 
 	return ESP_OK;
 }
@@ -438,7 +477,7 @@ esp_err_t display_jpeg(const uint8_t* jpeg_buf, uint32_t jpeg_size, const char* 
 											ppa_buf));
 
 	time5 = esp_timer_get_time() - base_time;
-	printf("%6ld,%6ld,%6ld,%6ld,%6ld\n", time1, time2-time1, time3-time2, time4-time3, time5-time4);
+//	printf("%6ld,%6ld,%6ld,%6ld,%6ld\n", time1, time2-time1, time3-time2, time4-time3, time5-time4);
 	return 0;
 }
 
