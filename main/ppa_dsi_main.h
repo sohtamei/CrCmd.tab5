@@ -36,6 +36,7 @@ struct rect {
 };
 
 esp_err_t _init_port(void);
+esp_err_t app_touch_init(esp_lcd_touch_handle_t *tp);
 
 esp_err_t dsi_init(void);
 void dsi_close(void);

@@ -10,7 +10,7 @@ static const char *TAG = "I2C";
 #define PORT_SCL			8
 
 #define I2C_TIMEOUT_MS		1000
-#define I2C_PORT			I2C_NUM_1
+#define I2C_PORT			I2C_NUM_0
 
 int _8encoder_init(void)
 {

@@ -20,6 +20,7 @@
 #include "usb/usb_host.h"
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
+#include "esp_lcd_touch_gt911.h"
 
 #include "PTPDef.h"
 #include "_8encoder.h"
@@ -671,12 +672,18 @@ void parseLvProp(const uint8_t* buf, int bufSize, struct rect* rect, int rectSiz
 
 extern "C" void app_main(void)
 {
+	esp_lcd_touch_handle_t tp_handle = NULL;
+
 	ESP_ERROR_CHECK(dsi_init());
 
 	lgfx_init(RAW_BUF_W, RAW_BUF_H);
 
 	jpegBuf = (uint8_t*)heap_caps_malloc(JpegBuf_SIZE, (MALLOC_CAP_DMA | MALLOC_CAP_CACHE_ALIGNED | MALLOC_CAP_SPIRAM));
 	if(!jpegBuf) { ESP_LOGE(TAG, "(%d)mallocError", __LINE__); return; }
+
+	_8encoder_init();
+
+	app_touch_init(&tp_handle);
 
 	usb_host_init();
 
@@ -703,8 +710,6 @@ extern "C" void app_main(void)
 							&class_driver_task_hdl,
 							0);
 	int i;
-
-	_8encoder_init();
 
 	while(g_driver_obj.dev_hdl == NULL)
 		vTaskDelay(100);
@@ -747,7 +752,8 @@ extern "C" void app_main(void)
 //	if(!ret) printf("%3ld,%3ld,%3ld,%3ld,\n", cnt_last[0],cnt_last[1],cnt_last[2],cnt_last[3],cnt_last[4]);//
 
 	uint8_t positionKey = 0;
-	uint32_t button_last = 1;
+	uint32_t button4_last = 1;
+	uint32_t button7_last = 1;
 
 	uint64_t base_time = 0;
 	uint32_t time1; (void)time1;
@@ -760,14 +766,34 @@ extern "C" void app_main(void)
 	int frame_count = 0; (void)frame_count;
 
 	while(1) {
+		esp_lcd_touch_read_data(tp_handle);
+		uint16_t touch_x[1];
+		uint16_t touch_y[1];
+		uint16_t touch_strength[1];
+		uint8_t touch_cnt = 0;
+
+		bool touchpad_pressed = esp_lcd_touch_get_coordinates(tp_handle, touch_x, touch_y, touch_strength, &touch_cnt, 1);
+		if(touchpad_pressed) {
+			printf("%d,%d\n", touch_x[0], touch_y[0]);//, touch_strength[0], touch_cnt);
+
+		//	SetL32(buf, (((1280-touch_y[0])*640/1280) << 16) | (touch_x[0]*480/720));
+			SetL32(buf, (((touch_x[0])*640/800) << 16) | (touch_y[0]*480/480));
+			ret = usb_ptp_transfer(PTP_OC_SDIOControlDevice, 2, PTP_CC_Remote_Touch_Operation_xy,1,0,0,0, buf,4, NULL,0,NULL);
+
+			uint32_t buf32[1] = {0x101010};
+			_8encoder_write(_8ENCODER_REG_RGB+3*7, buf32, 1);
+		}
+
 		base_time = esp_timer_get_time();
 
 		// 8encoder
 		ret = _8encoder_read(_8ENCODER_REG_COUNTER, cnt_cur, PARAM_NUM);
 	//	if(!ret) printf("%3ld,%3ld,%3ld,%3ld,\n", cnt_cur[0],cnt_cur[1],cnt_cur[2],cnt_cur[3],cnt_cur[4]);//
 
-		uint32_t button_cur = 1;
-		ret = _8encoder_read(_8ENCODER_REG_BUTTON+4, &button_cur, 1);
+		uint32_t button4_cur = 1;
+		ret = _8encoder_read(_8ENCODER_REG_BUTTON+4, &button4_cur, 1);
+		uint32_t button7_cur = 1;
+		ret = _8encoder_read(_8ENCODER_REG_BUTTON+7, &button7_cur, 1);
 		uint32_t osd = 1;
 		ret = _8encoder_read(_8ENCODER_REG_SWITCH, &osd, 1);
 
@@ -788,11 +814,21 @@ extern "C" void app_main(void)
 				cnt_last[i] = cnt_cur[i] & ~1;
 			}
 		}
-		if(button_last == 1 && button_cur == 0) {
+		if(button4_last == 1 && button4_cur == 0) {
 			positionKey = (positionKey?0:1);	// Camera/PC Remote
 			usb_ptp_transfer(PTP_OC_SDIOSetExtDevicePropValue, 2, DPC_POSITION_KEY,1,0,0,0, &positionKey,1, NULL,0,NULL);
 		}
-		button_last = button_cur;
+		button4_last = button4_cur;
+		if(button7_last == 1 && button7_cur == 0) {
+			SetL16(buf, 0x0002);
+			ret = usb_ptp_transfer(PTP_OC_SDIOControlDevice, 2, PTP_CC_Cancel_Remote_Touch_Operation,1,0,0,0, buf,4, NULL,0,NULL);
+			vTaskDelay(1);
+			SetL16(buf, 0x0001);
+			ret = usb_ptp_transfer(PTP_OC_SDIOControlDevice, 2, PTP_CC_Cancel_Remote_Touch_Operation,1,0,0,0, buf,4, NULL,0,NULL);
+			uint32_t buf32[1] = {0x000000};
+			_8encoder_write(_8ENCODER_REG_RGB+3*7, buf32, 1);
+		}
+		button7_last = button7_cur;
 		time2 = esp_timer_get_time() - base_time;
 
 		//### get LV ###
@@ -829,8 +865,8 @@ extern "C" void app_main(void)
 
 		//### render LV ###
 		if(lv_size) {
-			frame_count++;
 			display_jpeg(jpegBuf+lv_offset, lv_size, g_linebuf, g_rects, rectCount, osd);
+			frame_count++;
 		}
 #if 0
 		time4 = esp_timer_get_time() - base_time;

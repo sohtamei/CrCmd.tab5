@@ -19,6 +19,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_jd9165.h"
+#include "esp_lcd_touch_gt911.h"
 #include "esp_ldo_regulator.h"
 #include "sdkconfig.h"
 
@@ -38,11 +39,51 @@ static size_t raw_size = 0;
 static uint8_t* raw_buf = NULL;
 
 #define GPIO_LCD_BL		(gpio_num_t)23	//22
+#define TOUCH_RST			(22)
+#define TOUCH_INT			(21)
 
 esp_err_t _init_port(void)
 {
+	// esp_lcd_touch_new_i2c_gt911
+	gpio_set_direction(TOUCH_INT, GPIO_MODE_OUTPUT);
+	gpio_set_level(TOUCH_INT, 0);
+	gpio_set_direction(TOUCH_RST, GPIO_MODE_OUTPUT);
+	gpio_set_level(TOUCH_RST, 0);
+	vTaskDelay(10/portTICK_PERIOD_MS);
+	gpio_set_level(TOUCH_RST, 1);
+	vTaskDelay(60/portTICK_PERIOD_MS);
+
 	gpio_set_direction(GPIO_LCD_BL, GPIO_MODE_OUTPUT);
 	gpio_set_level(GPIO_LCD_BL, 1);			// ON
+
+	return ESP_OK;
+}
+
+#define BSP_LCD_H_RES (800)
+#define BSP_LCD_V_RES (480)
+
+esp_err_t app_touch_init(esp_lcd_touch_handle_t *tp)
+{
+	esp_lcd_panel_io_handle_t tp_io_handle = NULL;
+	esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
+	ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c((esp_lcd_i2c_bus_handle_t)I2C_NUM_0, &tp_io_config, &tp_io_handle));
+
+	const esp_lcd_touch_config_t tp_cfg = {
+		.x_max = BSP_LCD_H_RES,
+		.y_max = BSP_LCD_V_RES,
+		.rst_gpio_num = TOUCH_RST,
+		.int_gpio_num = TOUCH_INT,
+		.levels = {
+			.reset	 = 0,
+			.interrupt = 0,
+		},
+		.flags = {
+			.swap_xy  = 0,
+			.mirror_x = 0,
+			.mirror_y = 0,
+		},
+	};
+	ESP_ERROR_CHECK(esp_lcd_touch_new_i2c_gt911(tp_io_handle, &tp_cfg, tp));
 
 	return ESP_OK;
 }
