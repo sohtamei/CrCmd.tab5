@@ -676,8 +676,6 @@ extern "C" void app_main(void)
 
 	ESP_ERROR_CHECK(dsi_init());
 
-	lgfx_init(RAW_BUF_W, RAW_BUF_H);
-
 	jpegBuf = (uint8_t*)heap_caps_malloc(JpegBuf_SIZE, (MALLOC_CAP_DMA | MALLOC_CAP_CACHE_ALIGNED | MALLOC_CAP_SPIRAM));
 	if(!jpegBuf) { ESP_LOGE(TAG, "(%d)mallocError", __LINE__); return; }
 
@@ -767,20 +765,31 @@ extern "C" void app_main(void)
 
 	while(1) {
 		esp_lcd_touch_read_data(tp_handle);
-		uint16_t touch_x[1];
-		uint16_t touch_y[1];
-		uint16_t touch_strength[1];
+		uint16_t touch_x[2];
+		uint16_t touch_y[2];
+		uint16_t touch_strength[2];
 		uint8_t touch_cnt = 0;
 
-		bool touchpad_pressed = esp_lcd_touch_get_coordinates(tp_handle, touch_x, touch_y, touch_strength, &touch_cnt, 1);
+		bool touchpad_pressed = esp_lcd_touch_get_coordinates(tp_handle, touch_x, touch_y, touch_strength, &touch_cnt, 2);
 		if(touchpad_pressed) {
-			printf("%d,%d\n", touch_x[0], touch_y[0]);//, touch_strength[0], touch_cnt);
-
-		//	SetL32(buf, (((1280-touch_y[0])*640/1280) << 16) | (touch_x[0]*480/720));
-			SetL32(buf, (((touch_x[0])*640/800) << 16) | (touch_y[0]*480/480));
-			ret = usb_ptp_transfer(PTP_OC_SDIOControlDevice, 2, PTP_CC_Remote_Touch_Operation_xy,1,0,0,0, buf,4, NULL,0,NULL);
+			printf("%d,%d,%d,%d\n", touch_x[0], touch_y[0], touch_strength[0], touch_cnt);
 
 			uint32_t buf32[1] = {0x101010};
+			if(touch_cnt == 1) {
+			//	SetL32(buf, (((1280-touch_y[0])*640/1280) << 16) | (touch_x[0]*480/720));
+				SetL32(buf, (((touch_x[0])*640/800) << 16) | (touch_y[0]*480/480));
+				ret = usb_ptp_transfer(PTP_OC_SDIOControlDevice, 2, PTP_CC_Remote_Touch_Operation_xy,1,0,0,0, buf,4, NULL,0,NULL);
+
+				buf32[0] = 0x101010;
+			} else if(touch_cnt == 2) {
+				SetL16(buf, 0x0002);
+				ret = usb_ptp_transfer(PTP_OC_SDIOControlDevice, 2, PTP_CC_Cancel_Remote_Touch_Operation,1,0,0,0, buf,4, NULL,0,NULL);
+				vTaskDelay(1);
+				SetL16(buf, 0x0001);
+				ret = usb_ptp_transfer(PTP_OC_SDIOControlDevice, 2, PTP_CC_Cancel_Remote_Touch_Operation,1,0,0,0, buf,4, NULL,0,NULL);
+
+				buf32[0] = 0x000000;
+			}
 			_8encoder_write(_8ENCODER_REG_RGB+3*7, buf32, 1);
 		}
 

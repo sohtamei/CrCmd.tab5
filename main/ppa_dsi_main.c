@@ -150,6 +150,8 @@ esp_err_t dsi_init(void)
     };
     ESP_ERROR_CHECK(ppa_register_client(&ppa_blend_config, &ppa_blend_handle));
 
+	lgfx_init(RAW_BUF_W, RAW_BUF_H, raw_buf);
+
 	return 0;
 }
 
@@ -220,7 +222,7 @@ esp_err_t display_jpeg(const uint8_t* jpeg_buf, uint32_t jpeg_size, const char* 
 	if(osd) {
 		if(rectCount || last_rectCount) {
 		//	lgfx_fillScreen(LGFX_TFT_BLACK);
-			lgfx_fillRect(0,0, RAW_BUF_W,param->raw_height, LGFX_TFT_BLACK);
+		//	lgfx_fillRect(0,0, RAW_BUF_W,param->raw_height, LGFX_TFT_BLACK);
 			for(int j = 0; j < rectCount; j++) {
 				lgfx_drawRect(
 					rects[j].x*param->raw_width /640/1024,	// 640->width
