@@ -31,11 +31,12 @@ extern "C" {
 #define LGFX_TFT_VIOLET      0x915C      // 180,  46, 226
 #define LGFX_TFT_TRANSPARENT 0x0120
 
-void lgfx_init(int32_t w, int32_t h);
+void lgfx_init(int32_t w, int32_t h, uint8_t* raw_buf);
+void lgfx_drawString(const char *string, int32_t x, int32_t y);
+
+void lgfx_fillScreen(int color);
 void lgfx_fillRect(int32_t x, int32_t y, int32_t w, int32_t h, int color);
 void lgfx_drawRect(int32_t x, int32_t y, int32_t w, int32_t h, int color);
-void lgfx_drawString(const char *string, int32_t x, int32_t y);
-void lgfx_fillScreen(int color);
 
 
 uint8_t* lgfx_getBuffer(void);
